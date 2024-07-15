@@ -1,1 +1,1 @@
-scp -r $(pwd) root@itsnot.fun:itsnot.fun
+tar -czvf - . |ssh root@itsnot.fun tar -xzvf - -C /root/itsnot.fun
