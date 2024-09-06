@@ -1,0 +1,140 @@
+# k8s/grafana-pv-pvc.yaml
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: grafana-pv
+  namespace: gforge-core2
+spec:
+  capacity:
+    storage: 5Gi
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: manual
+  hostPath:
+    path: "/root/k8s/data/grafana-data"
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: grafana-pvc
+  namespace: gforge-core2
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+  storageClassName: manual
+---
+# k8s/grafana-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana-deployment
+  namespace: gforge-core2
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: grafana
+  template:
+    metadata:
+      labels:
+        app: grafana
+    spec:
+      containers:
+        - name: grafana
+          image: grafana/grafana:latest
+          ports:
+            - containerPort: 3000
+          volumeMounts:
+            - name: grafana-storage
+              mountPath: /var/lib/grafana
+          env:
+            - name: GF_UPDATE_CHECK
+              value: "false"
+      volumes:
+        - name: grafana-storage
+          persistentVolumeClaim:
+            claimName: grafana-pvc
+---
+# k8s/grafana-service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana-service
+  namespace: gforge-core2
+spec:
+  type: ClusterIP
+  ports:
+    - port: 3000
+      targetPort: 3000
+  selector:
+    app: grafana
+---
+# k8s/grafana-ingress.yaml
+#apiVersion: networking.k8s.io/v1
+#kind: Ingress
+#metadata:
+#  name: grafana-ingress
+#  annotations:
+#    kubernetes.io/ingress.class: traefik
+#    traefik.ingress.kubernetes.io/router.entrypoints: grafana
+#    traefik.ingress.kubernetes.io/router.middlewares: grafana-prefix-strip@kubernetescrd
+#  namespace: wangtengda
+#spec:
+#  rules:
+#    - http:
+#        paths:
+#          - path: /
+#            pathType: Prefix
+#            backend:
+#              service:
+#                name: grafana-service
+#                port:
+#                  number: 3000
+---
+apiVersion: traefik.containo.us/v1alpha1
+kind: Middleware
+metadata:
+  name: grafana-prefix-strip
+  namespace: gforge-core2
+spec:
+  stripPrefixRegex:
+    regex:
+      - ^/grafana
+---
+apiVersion: traefik.containo.us/v1alpha1
+kind: IngressRoute
+metadata:
+  name: alertmanager
+  namespace: gforge-core2
+spec:
+  routes:
+#    - kind: Rule
+#      match: Host(`10.100.7.150`) && PathPrefix(`/grafana/`)
+#      middlewares:
+#        - name: grafana-prefix-strip
+#      services:
+#        - name: grafana-service
+#          port: 3000
+    - kind: Rule
+      match: Host(`10.100.7.150`)
+      services:
+        - name: grafana-service
+          port: 3000
+---
+apiVersion: traefik.containo.us/v1alpha1
+kind: IngressRouteTCP
+metadata:
+  name: grafana
+  namespace: gforge-core2
+spec:
+  entryPoints:
+    - grafana
+  routes:
+    - match: HostSNI(`*`)
+      services:
+        - name: grafana-service
+          port: 3000
