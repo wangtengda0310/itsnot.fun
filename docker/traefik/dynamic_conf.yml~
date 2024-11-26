@@ -1,0 +1,16 @@
+entryPoints:
+  other:
+    address: ":8081"
+
+http:
+  routers:
+    whoami:
+      rule: "Host(`test.itsnot.fun`)"
+      service: test
+
+services:
+  test:
+    loadBalancer:
+      servers:
+      - url: http://test/
+      passHostHeader: false

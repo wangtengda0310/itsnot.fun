@@ -1,0 +1,71 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-deployment
+  namespace: wangtengda
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nginx
+  template:
+    metadata:
+      labels:
+        app: nginx
+    spec:
+      containers:
+        - name: nginx
+          image: nginx:latest
+          ports:
+            - containerPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx-service
+  namespace: wangtengda
+spec:
+  type: ClusterIP
+  ports:
+    - port: 80
+      targetPort: 80
+  selector:
+    app: nginx
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: wangtengda
+---
+apiVersion: traefik.containo.us/v1alpha1
+kind: Middleware
+metadata:
+  name: my-prefix-strip
+  namespace: wangtengda
+spec:
+  stripPrefixRegex:
+    regex:
+      - ^/asdf
+---
+apiVersion: traefik.containo.us/v1alpha1
+kind: IngressRoute
+metadata:
+  name: alertmanager
+  namespace: wangtengda
+spec:
+  routes:
+    - kind: Rule
+      match: Host(`10.100.7.150`) && PathPrefix(`/grafana/`)
+      middlewares:
+        - name: my-prefix-strip
+      services:
+        - name: nginx-service
+          port: 80
+    - kind: Rule
+      match: Host(`10.100.7.150`) && PathPrefix(`/asdf`)
+      middlewares:
+        - name: my-prefix-strip
+      services:
+        - name: grafana-service
+          port: 80
+          namespace: gforge-core2

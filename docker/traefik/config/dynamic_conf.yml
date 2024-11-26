@@ -1,0 +1,15 @@
+http:
+  routers:
+    whoami:
+      rule: "Host(`whoami.itsnot.fun`)"
+      service: test
+    itsnotfun-router:
+      rule: "Host(`itsnot.fun`)"
+      service: nginx@docker
+
+  services:
+    test:
+      loadBalancer:
+        servers:
+        - url: http://test/
+        passHostHeader: false

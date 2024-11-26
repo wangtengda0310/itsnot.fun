@@ -1,0 +1,85 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: etcd-service
+  namespace: gforge-core2
+data:
+  host: "etcd-service.gforge-core2.svc.cluster.local"
+  app.conf.yaml: |
+    log:
+      # Log文件目录, 默认: ./logs/
+      #Path: "./logs/"
+    transport:
+      # 客户端心跳最长监测事件
+      #MaxIdleTime: 600s
+    table:
+      # 策划配置路径，默认: "../table/"
+      #Path: "../table/"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gforge-core2-game-deployment
+  namespace: gforge-core2
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: gforge-core2-game
+  template:
+    metadata:
+      labels:
+        app: gforge-core2-game
+    spec:
+      containers:
+        - name: gforge-core2-game
+          image: gforge-core2-game
+          args: ["--zone_id=1", "--etcd=etcd-service.gforge-core2.svc.cluster.local:2379"]
+          env:
+            - name: ETCD_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: etcd-service
+                  key: host
+          volumeMounts:
+            - name: config-volume
+              mountPath: /workdir/app.conf.yaml
+              subPath: app.conf.yaml
+      volumes:
+        - name: config-volume
+          configMap:
+            name: etcd-service
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: etcd-service
+  namespace: gforge-core2
+spec:
+  selector:
+    app: etcd
+  ports:
+    - protocol: TCP
+      port: 2379
+      targetPort: 2379
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: etcd-deployment
+  namespace: gforge-core2
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: etcd
+  template:
+    metadata:
+      labels:
+        app: etcd
+    spec:
+      containers:
+        - name: etcd
+          image: quay.io/coreos/etcd
+          ports:
+            - containerPort: 2379

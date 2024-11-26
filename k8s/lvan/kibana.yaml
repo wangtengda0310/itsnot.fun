@@ -1,0 +1,49 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kibana
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kibana
+  template:
+    metadata:
+      labels:
+        app: kibana
+    spec:
+      containers:
+        - name: kibana
+          image: kibana:latest
+          ports:
+            - containerPort: 5601
+          env:
+            - name: "ELASTICSEARCH_URL"
+              value: "http://elasticsearch-service:9200"
+            - name: "ELASTICSEARCH_HOST"
+              value: "elasticsearch-service"
+            - name: "ELASTICSEARCH_PORT"
+              value: "9200"
+          # 其他环境变量...
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kibana
+spec:
+  ports:
+    - port: 5601
+      targetPort: 5601
+  selector:
+    app: kibana
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kibana-config
+data:
+  kibana.yml: |
+    server.name: "Kibana"
+    server.host: "0.0.0.0"
+    elasticsearch.hosts: ["http://elasticsearch-service:9200"]
+    # 其他配置...

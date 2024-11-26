@@ -1,0 +1,8 @@
+docker run -d -p 8080:8080 -p 80:80 \
+--name traefik \
+-v $PWD/traefik.yml:/etc/traefik/traefik.yml \
+-v /var/run/docker.sock:/var/run/docker.sock \
+-v /root/traefik/config:/root/traefik/config \
+-v /root/traefik/dynamic_conf.yml:/root/traefik/dynamic_conf.yml \
+traefik
+

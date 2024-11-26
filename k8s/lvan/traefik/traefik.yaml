@@ -1,0 +1,36 @@
+# traefik/ingressroute-tcp.yaml
+apiVersion: traefik.containo.us/v1alpha1
+kind: IngressRouteTCP
+metadata:
+  name: mysql-ingressroute
+spec:
+  entryPoints:
+    - tcp
+  routes:
+    - match: HostSNI(`*`)
+      services:
+        - name: mysql-service
+          port: 3306
+---
+apiVersion: traefik.containo.us/v1alpha1
+kind: IngressRoute
+metadata:
+  name: grafana-ingressroute
+spec:
+  entryPoints:
+    - grafana
+  routes:
+    - match: Host(`*`)
+      kind: Rule
+      services:
+        - name: grafana-service
+          port: 3000
+---
+# 修改k3s默认的traefik配置,找到kube-system中traefik的deployment,添加以下内容
+#- name: config
+#  configMap:
+#    name: traefik-config
+
+#volumeMounts:
+#  - mountPath: "/config"
+#    name: config

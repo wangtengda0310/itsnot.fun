@@ -1,0 +1,17 @@
+## traefik.yml
+
+# Docker configuration backend
+entryPoints:
+  other:
+    address: ":8081"
+providers:
+  docker:
+    defaultRule: "Host(`{{ trimPrefix `/` .Name }}.itsnot.fun`)"
+  file:
+    filename: /root/traefik/dynamic_conf.yml
+    directory: /root/traefik/config
+    watch: true
+    
+# API and dashboard configuration
+api:
+  insecure: true

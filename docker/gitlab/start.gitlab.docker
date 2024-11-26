@@ -1,0 +1,14 @@
+sudo docker run --detach \
+  --hostname gitlab.example.com \
+  --publish 443:443 --publish 80:80 --publish 22:22 \
+  --name gitlab \
+  --restart always \
+  --volume $(pwd)/config:/etc/gitlab \
+  --volume $(pwd)/logs:/var/log/gitlab \
+  --volume $(pwd)/data:/var/opt/gitlab \
+  --shm-size 256m \
+  registry.gitlab.cn/omnibus/gitlab-jh:latest
+
+sudo docker exec -it gitlab grep 'Password:' /etc/gitlab/initial_root_password
+
+echo 密码文件将在 24 小时后的第一次重新配置运行中自动删除。
