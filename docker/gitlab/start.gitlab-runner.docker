@@ -1,0 +1,7 @@
+docker run -itd \
+-u root \
+--privileged \
+--restart=always \
+--name gitlab-runner \
+-v /root/wangtengda/gitlab-runner/config:/etc/gitlab-runner \
+-v /var/run/docker.sock:/var/run/docker.sock  gitlab/gitlab-runner:v15.11.0
