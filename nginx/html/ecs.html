@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>10万物体 ECS Demo</title>
+    <style>
+        body { margin: 0; overflow: hidden; display: flex; flex-direction: column; height: 100vh; }
+        canvas { flex: 1; display: block; background-color: #f0f0f0; }
+        #stats {
+            position: fixed;
+            top: 10px;
+            left: 10px;
+            z-index: 100;
+            color: white;
+            font-family: Arial, sans-serif;
+            background-color: rgba(0, 0, 0, 0.5);
+            padding: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div id="stats">
+        <p id="fps">FPS: 0</p>
+        <p id="entityCount">Entities: 0</p>
+    </div>
+    <canvas id="canvas"></canvas>
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+
+        // ECS components
+        class Position {
+            constructor(x, y) {
+                this.x = x;
+                this.y = y;
+            }
+        }
+
+        class Velocity {
+            constructor(vx, vy) {
+                this.vx = vx;
+                this.vy = vy;
+            }
+        }
+	class Removed {
+	    constructor() {
+		this.removed = false
+	    }
+	}
+
+        class Entity {
+            constructor(id) {
+                this.id = id;
+                this.components = new Map();
+                this.color = `rgb(${Math.floor(Math.random() * 256)}, ${Math.floor(Math.random() * 256)}, ${Math.floor(Math.random() * 256)})`; // Random color
+            }
+
+            addComponent(componentName, component) {
+                this.components.set(componentName, component);
+            }
+
+            getComponent(componentName) {
+                return this.components.get(componentName);
+            }
+        }
+
+        // ECS Systems
+        class MovementSystem {
+            update(entities, currentTime, deltaTime) {
+                for (const entity of entities) {
+                    const pos = entity.getComponent('position');
+                    const vel = entity.getComponent('velocity');
+                    if (pos && vel) {
+                        // Move the entity by a fixed amount (5 pixels per frame)
+                        pos.x += vel.vx;
+                        pos.y += vel.vy;
+
+                        // Wrap around the screen
+                        if (pos.x < 0) pos.x = canvas.width;
+                        if (pos.x > canvas.width) pos.x = 0;
+                        if (pos.y < 0) pos.y = canvas.height;
+                        if (pos.y > canvas.height) pos.y = 0;
+                    }
+                }
+            }
+        }
+
+        class RenderSystem {
+            constructor() {
+                this.bufferCanvas = document.createElement('canvas');
+                this.bufferCanvas.width = canvas.width;
+                this.bufferCanvas.height = canvas.height;
+                this.bufferCtx = this.bufferCanvas.getContext('2d');
+            }
+
+            update(entities, currentTime, deltaTime) {
+                // Clear the buffer canvas
+                this.bufferCtx.clearRect(0, 0, this.bufferCanvas.width, this.bufferCanvas.height);
+
+                // Draw all entities with random colors
+                for (const entity of entities) {
+                    const pos = entity.getComponent('position');
+                    const removed = entity.getComponent('removed');
+                    if (pos && (!removed || !removed.removed)) {
+                        this.bufferCtx.beginPath();
+                        this.bufferCtx.arc(pos.x, pos.y, 5, 0, Math.PI * 2); // Smaller size for optimization
+                        this.bufferCtx.fillStyle = entity.color; // Each entity has a unique color
+                        this.bufferCtx.fill();
+                    } else {
+					    // ecsManager.entities.splice(i, 1); // Remove entity from ECS
+					    // entities.splice(i, 1); // Remove entity from the array
+		    }
+                }
+
+                // Copy buffer canvas to the main canvas
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                ctx.drawImage(this.bufferCanvas, 0, 0);
+            }
+        }
+
+        class FPSSystem {
+            constructor() {
+                this.lastTime = 0;
+                this.fps = 0;
+                this.frames = 0;
+		this.entities = 0;
+            }
+
+            update(entities, currentTime, systemDeltaTime) {
+		this.entities = entities.length;
+                this.frames++;
+                const deltaTime = (currentTime - this.lastTime) / 1000;
+                if (deltaTime >= 1) {
+                    this.fps = this.frames;
+                    this.frames = 0;
+                    this.lastTime = currentTime;
+                }
+            }
+
+            draw() {
+                document.getElementById('fps').innerText = `FPS: ${this.fps}`;
+                document.getElementById('entityCount').innerText = `Entities: ${this.entities.length}`;
+            }
+        }
+
+        class DragAreaSystem {
+            constructor(canvas) {
+		    this.reset();
+
+		    // Mouse down event: Start dragging
+		    canvas.addEventListener('mousedown', (e) => {
+			    this.dragStartX = e.clientX;
+			    this.dragStartY = e.clientY;
+			    this.dragEndX = e.clientX;
+			    this.dragEndY = e.clientY;
+			    this.isDragging = true;
+		    });
+
+		    // Mouse move event: Update drag area
+		    canvas.addEventListener('mousemove', (e) => {
+			    if (this.isDragging) {
+				    this.dragEndX = e.clientX;
+				    this.dragEndY = e.clientY;
+			    }
+		    });
+
+		    // Mouse up event: Stop dragging and remove entities in the drag area
+		    canvas.addEventListener('mouseup', (e) => {
+			    this.reset();
+		    });
+
+            }
+
+	    reset() {
+		    // Flag to determine if dragging
+		    this.isDragging = false;
+
+		    // Mouse drag to clear entities
+		    this.dragStartX = 0
+		    this.dragStartY = 0;
+		    this.dragEndX = 0
+		    this.dragEndY = 0;
+	    }
+
+            update(entities, currentTime, deltaTime) {
+			    const minX = Math.min(this.dragStartX, this.dragEndX);
+			    const maxX = Math.max(this.dragStartX, this.dragEndX);
+			    const minY = Math.min(this.dragStartY, this.dragEndY);
+			    const maxY = Math.max(this.dragStartY, this.dragEndY);
+
+			    // Remove entities within the dragged area
+			    for (let i = entities.length - 1; i >= 0; i--) {
+				    const entity = entities[i];
+				    const pos = entity.getComponent('position');
+				    if (pos && pos.x >= minX && pos.x <= maxX && pos.y >= minY && pos.y <= maxY) {
+					    const removed = entity.getComponent('removed');
+					    removed.removed = true
+				    }
+			    }
+            }
+
+            draw() {
+		    // If dragging, draw the dragging rectangle after everything else
+		    if (this.isDragging) {
+			    // Draw the drag area (this should be on top)
+			    ctx.fillStyle = 'rgba(173, 216, 230, 0.5)'; // Light blue with 50% transparency
+			    ctx.strokeStyle = 'black';  // Black border, fully opaque
+			    ctx.lineWidth = 2;  // Set border width
+			    ctx.beginPath();
+			    ctx.rect(this.dragStartX, this.dragStartY, this.dragEndX - this.dragStartX, this.dragEndY - this.dragStartY);
+			    ctx.fill();  // Fill the rectangle
+			    ctx.stroke();  // Draw the border
+		    }
+
+            }
+        }
+
+        // ECS manager
+        class ECSManager {
+            constructor() {
+                this.entities = [];
+                this.systems = [];
+            }
+
+            addEntity(entity) {
+                this.entities.push(entity);
+            }
+
+            addSystem(system) {
+                this.systems.push(system);
+            }
+
+            update(currentTime, deltaTime) {
+                this.systems.forEach(system => system.update(this.entities, currentTime, deltaTime));
+            }
+
+            render() {
+                this.systems.forEach(system => system.draw && system.draw());
+            }
+        }
+
+        // Initialization
+        const ecsManager = new ECSManager();
+        const movementSystem = new MovementSystem();
+        const renderSystem = new RenderSystem();
+        const fpsSystem = new FPSSystem();
+	const dragAreaSystem = new DragAreaSystem(canvas);
+
+        ecsManager.addSystem(movementSystem);
+        ecsManager.addSystem(renderSystem);
+        ecsManager.addSystem(fpsSystem);
+        ecsManager.addSystem(dragAreaSystem);
+
+        // Create entities with random movement and position
+        for (let i = 0; i < 100; i++) {
+            const entity = new Entity(i);
+            const position = new Position(Math.random() * canvas.width, Math.random() * canvas.height);
+            const velocity = new Velocity(Math.random() * 10 - 5, Math.random() * 10 - 5); // Random velocity between -5 and 5
+	    const removed = new Removed();
+            entity.addComponent('position', position);
+            entity.addComponent('velocity', velocity);
+            entity.addComponent('removed', removed);
+            ecsManager.addEntity(entity);
+        }
+        // Game loop
+        let lastTime = 0;
+
+        function gameLoop(currentTime) {
+            const deltaTime = (currentTime - lastTime) / 1000;
+            lastTime = currentTime;
+
+            // Update ECS systems
+            ecsManager.update(currentTime, deltaTime);
+
+            // Render systems (e.g., render entities)
+            ecsManager.render();
+
+            // Draw the FPS and Entity count
+            // fpsSystem.update(currentTime);
+            // fpsSystem.draw();
+
+            // Request next frame
+            requestAnimationFrame(gameLoop);
+        }
+
+        // Start the game loop
+        requestAnimationFrame(gameLoop);
+    </script>
+</body>
+</html>
+
