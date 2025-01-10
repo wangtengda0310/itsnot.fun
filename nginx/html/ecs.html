@@ -110,8 +110,6 @@
                         this.bufferCtx.fillStyle = entity.color; // Each entity has a unique color
                         this.bufferCtx.fill();
                     } else {
-					    // ecsManager.entities.splice(i, 1); // Remove entity from ECS
-					    // entities.splice(i, 1); // Remove entity from the array
 		    }
                 }
 
@@ -142,7 +140,7 @@
 
             draw() {
                 document.getElementById('fps').innerText = `FPS: ${this.fps}`;
-                document.getElementById('entityCount').innerText = `Entities: ${this.entities.length}`;
+                document.getElementById('entityCount').innerText = `Entities: ${this.entities}`;
             }
         }
 
@@ -222,6 +220,19 @@
             }
         }
 
+	class EntitiesManager{
+	    update(entities,currentTime,deltaTime) {
+		    for (let i = 0; i < entities.length; i++) {
+			    let entity = entities[i];
+			    const removed = entity.getComponent('removed');
+			    if (removed.removed ){
+				    entities.splice(i, 1); // Remove entity from the array
+			    }
+
+		    }
+	    }
+	}
+
         // ECS manager
         class ECSManager {
             constructor() {
@@ -252,23 +263,34 @@
         const renderSystem = new RenderSystem();
         const fpsSystem = new FPSSystem();
 	const dragAreaSystem = new DragAreaSystem(canvas);
+	const entitiesManager = new EntitiesManager();
 
         ecsManager.addSystem(movementSystem);
         ecsManager.addSystem(renderSystem);
         ecsManager.addSystem(fpsSystem);
         ecsManager.addSystem(dragAreaSystem);
+        ecsManager.addSystem(entitiesManager);
 
-        // Create entities with random movement and position
-        for (let i = 0; i < 100; i++) {
-            const entity = new Entity(i);
-            const position = new Position(Math.random() * canvas.width, Math.random() * canvas.height);
-            const velocity = new Velocity(Math.random() * 10 - 5, Math.random() * 10 - 5); // Random velocity between -5 and 5
-	    const removed = new Removed();
-            entity.addComponent('position', position);
-            entity.addComponent('velocity', velocity);
-            entity.addComponent('removed', removed);
-            ecsManager.addEntity(entity);
-        }
+document.addEventListener('keydown', function (event) {
+    // 检查是否按下了空格键
+    if (event.code === 'Space') {
+        console.log('Space key pressed!');
+        // 阻止默认行为（例如滚动页面）
+        event.preventDefault();
+		    // Create entities with random movement and position
+		    for (let i = ecsManager.entities.length; i < 10000; i++) {
+			    const entity = new Entity(i);
+			    const position = new Position(0.1 * Math.random() * canvas.width, 0.1 * Math.random() * canvas.height);
+			    const velocity = new Velocity(Math.random() * 10 - 5, Math.random() * 10 - 5); // Random velocity between -5 and 5
+			    const removed = new Removed();
+			    entity.addComponent('position', position);
+			    entity.addComponent('velocity', velocity);
+			    entity.addComponent('removed', removed);
+
+			    ecsManager.addEntity(entity);
+		    }
+    }
+});
         // Game loop
         let lastTime = 0;
 
