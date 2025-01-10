@@ -169,6 +169,7 @@
 
 		    // Mouse up event: Stop dragging and remove entities in the drag area
 		    canvas.addEventListener('mouseup', (e) => {
+			    this.clear();
 			    this.reset();
 		    });
 
@@ -186,6 +187,7 @@
 	    }
 
             update(entities, currentTime, deltaTime) {
+		    this.clear = function() {
 			    const minX = Math.min(this.dragStartX, this.dragEndX);
 			    const maxX = Math.max(this.dragStartX, this.dragEndX);
 			    const minY = Math.min(this.dragStartY, this.dragEndY);
@@ -200,6 +202,8 @@
 					    removed.removed = true
 				    }
 			    }
+		    }
+
             }
 
             draw() {
