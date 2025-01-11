@@ -31,28 +31,57 @@
         canvas.width = window.innerWidth;
         canvas.height = window.innerHeight;
 
+	class SparseSet {
+		constructor() {
+			this.densePos = 0;
+			this.dense = [];
+			this.sparse = [];
+		}
+		add(entity) {
+			this.dense.push(entity);
+			this.sparse[entity] = this.densePos;
+			this.densePos += 1;
+		}
+		remove(entity) {
+			this.densePos -= 1;
+			let swap = this.dense[this.densePos];
+			let remove = this.sparse[entity];
+			this.dense[this.densePos] = this.dense[remove];
+			this.dense[remove] = swap;
+			this.sparse[entity] = 0;
+		}
+		exists(entity) {
+			let pos = this.sparse[entity]
+			return this.dense[pos]==entity;
+		}
+	}
+
         // ECS components
-        class Position {
+        class Position extends SparseSet {
             constructor(x, y) {
+		    super();
                 this.x = x;
                 this.y = y;
             }
         }
 
-        class Velocity {
+        class Velocity extends SparseSet {
             constructor(vx, vy) {
+		    super();
                 this.vx = vx;
                 this.vy = vy;
             }
         }
-	class Removed {
+	class Removed extends SparseSet {
 	    constructor() {
+		    super();
 		this.removed = false
 	    }
 	}
 
-        class Entity {
+        class Entity extends SparseSet {
             constructor(id) {
+		    super();
                 this.id = id;
                 this.components = new Map();
                 this.color = `rgb(${Math.floor(Math.random() * 256)}, ${Math.floor(Math.random() * 256)}, ${Math.floor(Math.random() * 256)})`; // Random color
@@ -68,7 +97,7 @@
         }
 
         // ECS Systems
-        class MovementSystem {
+        class MovementSystem extends SparseSet {
             update(entities, currentTime, deltaTime) {
                 for (const entity of entities) {
                     const pos = entity.getComponent('position');
@@ -88,8 +117,9 @@
             }
         }
 
-        class RenderSystem {
+        class RenderSystem extends SparseSet {
             constructor() {
+		    super();
                 this.bufferCanvas = document.createElement('canvas');
                 this.bufferCanvas.width = canvas.width;
                 this.bufferCanvas.height = canvas.height;
@@ -119,8 +149,9 @@
             }
         }
 
-        class FPSSystem {
+        class FPSSystem extends SparseSet {
             constructor() {
+		    super();
                 this.lastTime = 0;
                 this.fps = 0;
                 this.frames = 0;
@@ -144,8 +175,9 @@
             }
         }
 
-        class DragAreaSystem {
+        class DragAreaSystem extends SparseSet {
             constructor(canvas) {
+		    super();
 		    this.reset();
 
 		    // Mouse down event: Start dragging
