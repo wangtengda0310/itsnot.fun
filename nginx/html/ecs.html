@@ -39,27 +39,33 @@
 		}
 		add(entity) {
 			this.dense.push(entity);
-			this.sparse[entity] = this.densePos;
+			this.sparse[entity[0]] = this.densePos;
 			this.densePos += 1;
 		}
 		remove(entity) {
 			this.densePos -= 1;
 			let swap = this.dense[this.densePos];
 			let remove = this.sparse[entity];
-			this.dense[this.densePos] = this.dense[remove];
 			this.dense[remove] = swap;
 			this.sparse[entity] = 0;
 		}
 		exists(entity) {
 			let pos = this.sparse[entity]
-			return this.dense[pos]==entity;
+			return this.dense[pos][0]==entity;
 		}
 	}
 
         // ECS components
-        class Position extends SparseSet {
+	class PositionComponent extends SparseSet {
+	}
+	class VelocityComponent extends SparseSet {
+	}
+	class SizeComponent extends SparseSet {
+	}
+	class ColorComponent extends SparseSet {
+	}
+        class Position {
             constructor(x, y) {
-		    super();
                 this.x = x;
                 this.y = y;
             }
@@ -72,36 +78,29 @@
                 this.vy = vy;
             }
         }
-	class Removed extends SparseSet {
-	    constructor() {
-		    super();
-		this.removed = false
-	    }
+	class RemovedComponent extends SparseSet {
+	}
+	class KeyEventComponent extends SparseSet {
 	}
 
-        class Entity extends SparseSet {
-            constructor(id) {
-		    super();
-                this.id = id;
-                this.components = new Map();
-                this.color = `rgb(${Math.floor(Math.random() * 256)}, ${Math.floor(Math.random() * 256)}, ${Math.floor(Math.random() * 256)})`; // Random color
-            }
 
-            addComponent(componentName, component) {
-                this.components.set(componentName, component);
-            }
-
-            getComponent(componentName) {
-                return this.components.get(componentName);
-            }
-        }
+	class System {
+		update(){}
+	}
 
         // ECS Systems
         class MovementSystem extends SparseSet {
-            update(entities, currentTime, deltaTime) {
-                for (const entity of entities) {
-                    const pos = entity.getComponent('position');
-                    const vel = entity.getComponent('velocity');
+
+		constructor(posComponent, velComponent) {
+			super();
+			this.posComponent = posComponent;
+			this.velComponent = velComponent;
+		}
+
+            update(currentTime, deltaTime) {
+                for (let i = 0; i < this.posComponent.densePos; i++) {
+                    const pos = this.posComponent.dense[i][1];
+                    const vel = this.velComponent.dense[i][1];
                     if (pos && vel) {
                         // Move the entity by a fixed amount (5 pixels per frame)
                         pos.x += vel.vx;
@@ -117,27 +116,33 @@
             }
         }
 
-        class RenderSystem extends SparseSet {
-            constructor() {
-		    super();
+        class RenderSystem {
+            constructor(positionComponent, sizeComponent, colorComponent, removedComponent) {
                 this.bufferCanvas = document.createElement('canvas');
                 this.bufferCanvas.width = canvas.width;
                 this.bufferCanvas.height = canvas.height;
                 this.bufferCtx = this.bufferCanvas.getContext('2d');
+		this.removedComponent = removedComponent;
+
+		    this.positionComponent = positionComponent;
+		    this.sizeComponent = sizeComponent;
+		    this.colorComponent = colorComponent;
             }
 
-            update(entities, currentTime, deltaTime) {
+            update(currentTime, deltaTime) {
                 // Clear the buffer canvas
                 this.bufferCtx.clearRect(0, 0, this.bufferCanvas.width, this.bufferCanvas.height);
 
                 // Draw all entities with random colors
-                for (const entity of entities) {
-                    const pos = entity.getComponent('position');
-                    const removed = entity.getComponent('removed');
-                    if (pos && (!removed || !removed.removed)) {
+                for (let i = 0; i < this.positionComponent.densePos; i++) {
+                    const pos = this.positionComponent.dense[i];
+		    const size = this.sizeComponent.dense[i];
+	    	    const color = this.colorComponent.dense[i];
+                    const removed = this.removedComponent.exists[pos[0]];
+                    if (pos && pos[1] && size && size[1] && !removed) {
                         this.bufferCtx.beginPath();
-                        this.bufferCtx.arc(pos.x, pos.y, 5, 0, Math.PI * 2); // Smaller size for optimization
-                        this.bufferCtx.fillStyle = entity.color; // Each entity has a unique color
+                        this.bufferCtx.arc(pos[1].x, pos[1].y, size[1], 0, Math.PI * 2); // Smaller size for optimization
+	    this.bufferCtx.fillStyle = `rgb(${color[0]},${color[1]},${color[2]})`;
                         this.bufferCtx.fill();
                     } else {
 		    }
@@ -150,16 +155,15 @@
         }
 
         class FPSSystem extends SparseSet {
-            constructor() {
+            constructor(positionComponent) {
 		    super();
+	        this.positionComponent = positionComponent;
                 this.lastTime = 0;
                 this.fps = 0;
                 this.frames = 0;
-		this.entities = 0;
             }
 
-            update(entities, currentTime, systemDeltaTime) {
-		this.entities = entities.length;
+            update(currentTime, systemDeltaTime) {
                 this.frames++;
                 const deltaTime = (currentTime - this.lastTime) / 1000;
                 if (deltaTime >= 1) {
@@ -171,13 +175,15 @@
 
             draw() {
                 document.getElementById('fps').innerText = `FPS: ${this.fps}`;
-                document.getElementById('entityCount').innerText = `Entities: ${this.entities}`;
+                document.getElementById('entityCount').innerText = `Entities: ${this.positionComponent.densePos}`;
             }
         }
 
         class DragAreaSystem extends SparseSet {
-            constructor(canvas) {
+            constructor(canvas, positionComponent, removedComponent) {
 		    super();
+		    this.positionComponent = positionComponent;
+		    this.removedComponent = removedComponent;
 		    this.reset();
 
 		    // Mouse down event: Start dragging
@@ -197,10 +203,12 @@
 			    }
 		    });
 
+		    let dragSystem = this;
+
 		    // Mouse up event: Stop dragging and remove entities in the drag area
 		    canvas.addEventListener('mouseup', (e) => {
-			    this.clear();
-			    this.reset();
+			    dragSystem.clear();
+			    dragSystem.reset();
 		    });
 
             }
@@ -216,7 +224,9 @@
 		    this.dragEndY = 0;
 	    }
 
-            update(entities, currentTime, deltaTime) {
+            update(currentTime, deltaTime) {
+		    let positionComponent = this.positionComponent;
+		    let removedComponent = this.removedComponent;
 		    this.clear = function() {
 			    const minX = Math.min(this.dragStartX, this.dragEndX);
 			    const maxX = Math.max(this.dragStartX, this.dragEndX);
@@ -224,14 +234,14 @@
 			    const maxY = Math.max(this.dragStartY, this.dragEndY);
 
 			    // Remove entities within the dragged area
-			    for (let i = entities.length - 1; i >= 0; i--) {
-				    const entity = entities[i];
-				    const pos = entity.getComponent('position');
+			    for (let i = this.positionComponent.densePos - 1; i >= 0; i--) {
+				    let positionDense = this.positionComponent.dense[i];
+				    const pos = positionDense[1];
 				    if (pos && pos.x >= minX && pos.x <= maxX && pos.y >= minY && pos.y <= maxY) {
-					    const removed = entity.getComponent('removed');
-					    removed.removed = true
+	    				    removedComponent.add(positionDense[0]);
 				    }
 			    }
+			    removedComponent.densePos = 0;
 		    }
 
             }
@@ -252,36 +262,19 @@
             }
         }
 
-	class EntitiesManager{
-	    update(entities,currentTime,deltaTime) {
-		    for (let i = 0; i < entities.length; i++) {
-			    let entity = entities[i];
-			    const removed = entity.getComponent('removed');
-			    if (removed.removed ){
-				    entities.splice(i, 1); // Remove entity from the array
-			    }
-
-		    }
-	    }
-	}
-
         // ECS manager
         class ECSManager {
             constructor() {
-                this.entities = [];
                 this.systems = [];
             }
 
-            addEntity(entity) {
-                this.entities.push(entity);
-            }
 
             addSystem(system) {
                 this.systems.push(system);
             }
 
             update(currentTime, deltaTime) {
-                this.systems.forEach(system => system.update(this.entities, currentTime, deltaTime));
+                this.systems.forEach(system => system.update(currentTime, deltaTime));
             }
 
             render() {
@@ -291,38 +284,72 @@
 
         // Initialization
         const ecsManager = new ECSManager();
-        const movementSystem = new MovementSystem();
-        const renderSystem = new RenderSystem();
-        const fpsSystem = new FPSSystem();
-	const dragAreaSystem = new DragAreaSystem(canvas);
-	const entitiesManager = new EntitiesManager();
+
+	const positionComponent = new PositionComponent();
+	const velComponent = new VelocityComponent();
+	const sizeComponent = new SizeComponent();
+	const colorComponent = new ColorComponent();
+	const removedComponent = new RemovedComponent();
+
+        const movementSystem = new MovementSystem(positionComponent,velComponent);
+        const renderSystem = new RenderSystem(positionComponent, sizeComponent, colorComponent, removedComponent);
+        const fpsSystem = new FPSSystem(positionComponent);
+	const dragAreaSystem = new DragAreaSystem(canvas, positionComponent, removedComponent);
+
+	let keyEventComponent = new KeyEventComponent();
 
         ecsManager.addSystem(movementSystem);
         ecsManager.addSystem(renderSystem);
         ecsManager.addSystem(fpsSystem);
         ecsManager.addSystem(dragAreaSystem);
-        ecsManager.addSystem(entitiesManager);
 
-document.addEventListener('keydown', function (event) {
-    // 检查是否按下了空格键
-    if (event.code === 'Space') {
-        console.log('Space key pressed!');
-        // 阻止默认行为（例如滚动页面）
-        event.preventDefault();
-		    // Create entities with random movement and position
-		    for (let i = ecsManager.entities.length; i < 10000; i++) {
-			    const entity = new Entity(i);
-			    const position = new Position(0.1 * Math.random() * canvas.width, 0.1 * Math.random() * canvas.height);
-			    const velocity = new Velocity(Math.random() * 10 - 5, Math.random() * 10 - 5); // Random velocity between -5 and 5
-			    const removed = new Removed();
-			    entity.addComponent('position', position);
-			    entity.addComponent('velocity', velocity);
-			    entity.addComponent('removed', removed);
+	class KeyEventSystem extends System {
+		constructor(spaceKeyPressedComponent, positionComponent, velocityComponent, sizeComponent, colorComponent) {
+			super();
+			this.spaceKeyPressedComponent = spaceKeyPressedComponent;
+			this.positionComponent = positionComponent;
+			this.velocityComponent = velocityComponent;
+			this.sizeComponent = sizeComponent;
+			this.colorComponent = colorComponent;
 
-			    ecsManager.addEntity(entity);
-		    }
-    }
-});
+			let i = 0;
+			addEventListener('keydown', function (event) {
+				// 检查是否按下了空格键
+				if (event.code === 'Space') {
+					// 阻止默认行为（例如滚动页面）
+					event.preventDefault();
+					spaceKeyPressedComponent.add(i++);
+				}
+		    });
+		}
+
+		addEventListener(eventType, callback) {
+			document.addEventListener(eventType, callback);
+		}
+
+		update() {
+			if (this.spaceKeyPressedComponent.densePos == 0) {
+				return;
+			}
+			this.spaceKeyPressedComponent.densePos = 0;
+			console.log(this.spaceKeyPressedComponent.dense);
+			// Create entities with random movement and position
+			for (let i = this.positionComponent.densePos; i < 10000; i++) {
+	    const position = new Position(0.1 * Math.random() * canvas.width, 0.1 * Math.random() * canvas.height);
+	    this.positionComponent.add([i,position]);
+	    const velocity = new Velocity(Math.random() * 10 - 5, Math.random() * 10 - 5); // Random velocity between -5 and 5
+	    this.velocityComponent.add([i,velocity]);
+	    this.sizeComponent.add([i, 5]);
+            let color = [Math.floor(Math.random() * 256), Math.floor(Math.random() * 256), Math.floor(Math.random() * 256)]; // Random color
+	    this.colorComponent.add(color); // Each entity has a unique color
+
+		        }
+		}
+	}
+
+	let keyEventSystem = new KeyEventSystem(keyEventComponent,positionComponent,velComponent, sizeComponent, colorComponent)
+	ecsManager.addSystem(keyEventSystem);
+
         // Game loop
         let lastTime = 0;
 
