@@ -4,5 +4,7 @@ docker run -d \
 -v /root/itsnot.fun/nginx/conf/conf.d:/etc/nginx/conf.d \
 -v /root/itsnot.fun/nginx/html:/usr/share/nginx/html \
 -p 80:80 \
+-p 8080:8080 \
 -p 443:443 \
+--network ipfs-net \
 nginx
