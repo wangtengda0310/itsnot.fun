@@ -34,3 +34,11 @@ spec:
 #volumeMounts:
 #  - mountPath: "/config"
 #    name: config
+
+#spec:
+#  ports:
+#    - name: grafana
+#    - nodePort: 30939
+#      port: 3000
+#      protocol: TCP
+#      targetPort: web
