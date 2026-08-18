@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>WebRTC file:// 防呆测试 v3</title>
+<style>
+*{box-sizing:border-box}
+body{font-family:monospace;background:#1e1e1e;color:#dcdcdc;padding:16px;max-width:900px;margin:0 auto}
+h2{margin:6px 0;color:#6cf}
+.panel{border:1px solid #444;padding:10px;margin:8px 0;border-radius:6px;background:#252525}
+label{display:block;margin:6px 0}
+input,select,button{padding:8px;font-size:14px;font-family:monospace}
+button{cursor:pointer;background:#333;color:#fff;border:1px solid #555;border-radius:4px}
+button:hover{background:#444}
+button:disabled{opacity:.5;cursor:not-allowed}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+#log{background:#000;padding:10px;height:400px;overflow:auto;border:1px solid #444;border-radius:4px;font-size:13px;line-height:1.5;margin:0}
+.ok{color:#0f0}.err{color:#f55}.warn{color:#fc3}.info{color:#6cf}.dim{color:#888}
+.badge{display:inline-block;padding:2px 8px;border-radius:3px;font-size:12px;margin-left:6px}
+.b-on{background:#0a0;color:#000}.b-off{background:#555;color:#ccc}.b-warn{background:#a80;color:#000}
+#msg{width:240px}
+</style>
+</head>
+<body>
+
+<h2>🧪 WebRTC 最小连接测试 <span class="dim" style="font-size:12px">file:// 防呆版 v3</span></h2>
+
+<div class="panel">
+  <div class="row">
+    <label>信令 <input id="url" value="ws://127.0.0.1:3001" size="22"></label>
+    <label>房间 <input id="room" value="boids-test-001" size="16"></label>
+  </div>
+  <div class="row">
+    <label>我选:
+      <select id="role">
+        <option value="" disabled selected>-- 必须先选角色 --</option>
+        <option value="A">🅰️ 页面 A（先开，只回 answer）</option>
+        <option value="B">🅱️ 页面 B（后开，只发 offer）</option>
+      </select>
+    </label>
+  </div>
+  <div class="row" id="status">
+    <span>信令:</span><span id="sWs" class="badge b-off">未连接</span>
+    <span>PC:</span><span id="sPc" class="badge b-off">未连接</span>
+    <span>DC:</span><span id="sDc" class="badge b-off">未打开</span>
+  </div>
+  <div class="row" style="margin-top:8px">
+    <button id="btnSig" onclick="connectSig()">🔌 连接信令</button>
+    <button onclick="closeAll()">🔒 关闭全部</button>
+    <button onclick="document.getElementById('log').innerHTML=''">🗑 清日志</button>
+  </div>
+</div>
+
+<div class="panel">
+  <div class="row">
+    <input id="msg" placeholder="输入消息后发送">
+    <button id="btnSend" onclick="sendMsg()" disabled>📤 发送</button>
+    <span class="dim" id="sendHint">（DC 打开后才能发）</span>
+  </div>
+  <div id="recv" class="dim" style="margin-top:6px">收到消息: —</div>
+</div>
+
+<div class="panel" style="background:#1a1a2e">
+  <div class="dim" style="font-size:12px;margin-bottom:4px">📋 日志</div>
+  <pre id="log"></pre>
+</div>
+
+<script>
+// ===== 全局状态 =====
+let ws=null, pc=null, dc=null, myId=null, myRole='';
+let offerPending = false;
+const logBox = document.getElementById('log');
+
+// ===== 日志 =====
+function log(t, level='info'){
+  const d = new Date().toLocaleTimeString('en-GB');
+  const cls = {ok:'ok', err:'err', warn:'warn', info:'info', dim:'dim'}[level] || 'info';
+  logBox.innerHTML += `<span class="${cls}">[${d}] ${t}</span>\n`;
+  logBox.scrollTop = logBox.scrollHeight;
+  console.log(`[${level}] ${t}`);
+}
+
+// ===== 状态徽章 =====
+function setBadge(id, text, cls){
+  const el = document.getElementById(id); el.textContent = text; el.className = 'badge '+cls;
+}
+
+// ===== 角色校验 =====
+function checkRole(){
+  myRole = document.getElementById('role').value;
+  if(!myRole){ log('❌ 请先选择角色（页面 A 或 B）','err'); return false; }
+  log(`🎯 角色: ${myRole==='A'?'🅰️ 页面A（先到者/answerer）':'🅱️ 页面B（后到者/offerer）'}`,'ok');
+  return true;
+}
+
+// ===== 连接信令 =====
+function connectSig(){
+  if(!checkRole()) return;
+  const u = document.getElementById('url').value.trim();
+  const room = document.getElementById('room').value.trim();
+  log(`🔌 连接信令: ${u}  房间: ${room}`,'info');
+  try{ ws = new WebSocket(u); }
+  catch(e){ log('❌ WS 创建失败: '+e.message,'err'); return; }
+
+  ws.onopen = ()=>{
+    log('✅ 信令 WS 已连接','ok');
+    setBadge('sWs','已连接','b-on');
+    myId = Math.random().toString(36).slice(2,10);
+    ws.send(JSON.stringify({type:'join', room:room, id:myId}));
+    log(`📨 join → [${room}]  myId=${myId}`,'info');
+  };
+  ws.onerror = ()=> log('❌ WS 错误（信令服务器是否启动？）','err');
+  ws.onclose = ()=>{
+    log('🔌 信令 WS 已关闭','warn');
+    setBadge('sWs','已关闭','b-warn');
+  };
+  ws.onmessage = e => {
+    let m; try{ m = JSON.parse(e.data); }catch{ return; }
+    handleSig(m);
+  };
+}
+
+// ===== 信令发送 =====
+function sendRaw(obj){
+  if(ws && ws.readyState===1) ws.send(JSON.stringify(obj));
+}
+
+// ===== 信令处理（v3 修复核心）=====
+function handleSig(m){
+  const t = m.type;
+  const fromId = m.id;
+
+  // 忽略自己回环
+  if(fromId && fromId === myId){ log(`🔄 忽略自己回环 type=${t}`,'dim'); return; }
+
+  if(t==='joined'){
+    log(`📩 joined (peerId=${m.peerId}) existing=${JSON.stringify(m.existing)}`,'info');
+    if(!m.existing || m.existing.length===0){
+      log('   → 我是房间第一个人，等待对方加入…','dim');
+    }
+    // ★ v3 修复：B 收到 joined 时若已有 existing 成员，立即发 offer
+    else if(myRole==='B' && !pc && !offerPending){
+      log(`   → 我是B，房间已有 ${m.existing.length} 人，立即发起 offer`,'ok');
+      offerPending = true;
+      setTimeout(()=>createPCAndOffer(), 50);
+    }
+    else if(myRole==='A'){
+      log('   → 我是A（先到者），等待B的offer','dim');
+    }
+  }
+  else if(t==='peer-joined'){
+    log(`📩 peer-joined (peerId=${m.peerId})`,'ok');
+    if(myRole==='A'){
+      log('   → 我是A，等待B的offer…','dim');
+    }
+    else if(myRole==='B' && !pc && !offerPending){
+      log('   → B 补发 offer','warn');
+      offerPending = true;
+      setTimeout(()=>createPCAndOffer(), 50);
+    }
+  }
+  else if(t==='offer'){
+    log('📩 收到 Offer (SDP)','ok');
+    handleOffer(m.offer);
+  }
+  else if(t==='answer'){
+    log('📩 收到 Answer (SDP)','ok');
+    if(pc && pc.signalingState==='have-local-offer'){
+      pc.setRemoteDescription(new RTCSessionDescription(m.answer))
+        .then(()=>log('✅ 设置 Remote Answer 完成','ok'))
+        .catch(e=>log('❌ setRemoteAnswer: '+e.message,'err'));
+    } else {
+      log(`⚠️ 忽略 answer（state=${pc?pc.signalingState:'no-pc'}）`,'warn');
+    }
+  }
+  else if(t==='candidate'){
+    if(pc && m.candidate){
+      pc.addIceCandidate(new RTCIceCandidate(m.candidate))
+        .then(()=>{})
+        .catch(e=>log('⚠️ addIceCandidate: '+e.message,'warn'));
+    } else if(m.candidate) {
+      log('⚠️ PC 未就绪，候选将在 ICE 重收集时获取','dim');
+    }
+  }
+  else if(t==='peer-left'){
+    log(`📩 peer-left (peerId=${m.peerId})`,'warn');
+  }
+  else {
+    log(`📩 未知消息 type=${t}`,'dim');
+  }
+}
+
+// ===== 创建 PC + 发 Offer（仅B）=====
+function createPCAndOffer(){
+  if(pc){ log('⚠️ PC 已存在，跳过','warn'); return; }
+  pc = new RTCPeerConnection({iceServers:[{urls:'stun:stun.l.google.com:19302'}]});
+  setBadge('sPc','连接中…','b-warn');
+  log('🔧 创建 RTCPeerConnection（B/offerer）','info');
+
+  dc = pc.createDataChannel('chat');
+  bindDC(dc, 'B 创建');
+
+  pc.onicecandidate = e => {
+    if(e.candidate){
+      sendRaw({type:'candidate', candidate:e.candidate, id:myId});
+      log('📤 发送 ICE candidate','dim');
+    } else {
+      log('📤 ICE 收集完成','info');
+    }
+  };
+  pc.onconnectionstatechange = ()=>{
+    log(`🔄 PC 状态: ${pc.connectionState}`, pc.connectionState==='connected'?'ok':'info');
+    if(pc.connectionState==='connected'){ setBadge('sPc','已连接','b-on'); offerPending=false; }
+    if(pc.connectionState==='failed'){ log('❌ PC 连接失败（检查STUN/网络）','err'); setBadge('sPc','失败','err'); }
+    if(pc.connectionState==='disconnected'){ log('⚠️ PC 断开，等待恢复…','warn'); }
+  };
+
+  pc.createOffer().then(o=>{
+    return pc.setLocalDescription(o).then(()=>o);
+  }).then(o=>{
+    sendRaw({type:'offer', offer:o, id:myId});
+    log('📤 发送 Offer (SDP)','ok');
+  }).catch(e=>{
+    log('❌ createOffer: '+e.message,'err');
+    offerPending = false;
+  });
+}
+
+// ===== 收到 Offer（A 回应）=====
+function handleOffer(offer){
+  if(pc){ log('⚠️ 已有PC，忽略重复offer','warn'); return; }
+  pc = new RTCPeerConnection({iceServers:[{urls:'stun:stun.l.google.com:19302'}]});
+  setBadge('sPc','连接中…','b-warn');
+  log('🔧 创建 RTCPeerConnection（A/answerer）','info');
+
+  pc.ondatachannel = e => bindDC(e.channel, 'A 接收');
+
+  pc.onicecandidate = e => {
+    if(e.candidate){
+      sendRaw({type:'candidate', candidate:e.candidate, id:myId});
+      log('📤 发送 ICE candidate','dim');
+    } else {
+      log('📤 ICE 收集完成','info');
+    }
+  };
+  pc.onconnectionstatechange = ()=>{
+    log(`🔄 PC 状态: ${pc.connectionState}`, pc.connectionState==='connected'?'ok':'info');
+    if(pc.connectionState==='connected') setBadge('sPc','已连接','b-on');
+    if(pc.connectionState==='failed'){ log('❌ PC 连接失败（检查STUN/网络）','err'); setBadge('sPc','失败','err'); }
+  };
+
+  pc.setRemoteDescription(new RTCSessionDescription(offer)).then(()=>{
+    log('📥 设置 Remote Offer 完成','ok');
+    return pc.createAnswer();
+  }).then(a=>{
+    return pc.setLocalDescription(a).then(()=>a);
+  }).then(a=>{
+    sendRaw({type:'answer', answer:a, id:myId});
+    log('📤 发送 Answer (SDP)','ok');
+  }).catch(e=>log('❌ handleOffer: '+e.message,'err'));
+}
+
+// ===== DataChannel 绑定 =====
+function bindDC(channel, who){
+  dc = channel;
+  log(`📡 DataChannel [${who}] state=${dc.readyState}`,'info');
+  dc.onopen = ()=>{
+    log('✅✅✅ DataChannel 已打开！可以发消息了','ok');
+    setBadge('sDc','已打开','b-on');
+    document.getElementById('btnSend').disabled = false;
+    document.getElementById('sendHint').textContent = '';
+  };
+  dc.onclose = ()=>{
+    log('🔒 DataChannel 已关闭','warn');
+    setBadge('sDc','已关闭','b-warn');
+    document.getElementById('btnSend').disabled = true;
+  };
+  dc.onmessage = e => {
+    document.getElementById('recv').innerHTML = '📩 收到: <span class="ok">'+e.data+'</span>';
+    log('📩 收到消息: '+e.data,'ok');
+  };
+}
+
+// ===== 发送消息 =====
+function sendMsg(){
+  const v = document.getElementById('msg').value;
+  if(!v){ log('⚠️ 消息为空','warn'); return; }
+  if(!dc || dc.readyState!=='open'){ log('⚠️ DC 未打开，不能发送','warn'); return; }
+  dc.send(v);
+  log('📤 发送: '+v,'info');
+  document.getElementById('msg').value = '';
+}
+
+// ===== 关闭全部 =====
+function closeAll(){
+  try{ dc && dc.close(); }catch{}
+  try{ pc && pc.close(); }catch{}
+  try{ ws && ws.close(); }catch{}
+  dc=null; pc=null; ws=null; offerPending=false;
+  setBadge('sWs','未连接','b-off'); setBadge('sPc','未连接','b-off'); setBadge('sDc','未打开','b-off');
+  document.getElementById('btnSend').disabled = true;
+  document.getElementById('sendHint').textContent='（DC 打开后才能发）';
+  log('🔒 已关闭全部连接','warn');
+}
+
+// ===== 初始化 =====
+log('📋 页面就绪（file:// 模式 v3）','dim');
+log('💡 修复：B 收到 joined(existing>0) 时立即发 offer','dim');
+log('   🅰️ 页面A 先开（选A）  🅱️ 页面B 后开（选B）','dim');
+document.getElementById('role').addEventListener('change', ()=> checkRole());
+</script>
+</body>
+</html>

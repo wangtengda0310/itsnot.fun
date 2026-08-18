@@ -1,0 +1,12 @@
+{
+  "name": "webrtc-file-test",
+  "version": "3.0.0",
+  "description": "WebRTC file:// 防呆测试 v3 - 修复 B 收到 joined(existing>0) 时未发 offer 的 bug",
+  "main": "signal.js",
+  "scripts": {
+    "start": "node signal.js"
+  },
+  "dependencies": {
+    "ws": "^8.17.0"
+  }
+}
