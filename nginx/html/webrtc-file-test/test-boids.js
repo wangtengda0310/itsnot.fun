@@ -100,5 +100,77 @@ for (const e of w9.local.values()) if (!isFinite(e.x + e.y + e.vx + e.vy)) bad++
 ok(bad === 0, '60 秒长跑无 NaN');
 ok([...w9.local.values()].filter(e => e.kind === 'predator').length === 0, '捕食者寿命到期自动移除');
 
+// 10) 远端穿边界渲染连续性（回归：此前跨屏插值导致瞬移）
+// 注意：remotePos 返回归一化坐标，穿缝时 799→1 是正确渲染；视觉连续性要用环面距离衡量
+{
+  const A = C.makeWorld('A'); A.local.clear();
+  const bw = C.makeBoid('wb', 750, 300); bw.vx = 165; bw.vy = 0;
+  A.local.set('wb', bw);
+  const Bw = C.makeWorld('B');
+  let sent = -1, prevX = null, maxJump = 0;
+  for (let t = 0; t < 1.2; t += 1 / 60) {
+    C.step(A, 1 / 60, W, H);
+    if (t - sent >= 0.066) { sent = t; C.applyRemoteState(Bw, 'A', C.snapshot(A, W, H), Bw.time, W, H); }
+    C.step(Bw, 1 / 60, W, H);
+    const r = Bw.remote.get('wb');
+    if (!r) continue;
+    const p = C.remotePos(r, Bw.time, W, H);
+    if (prevX !== null) maxJump = Math.max(maxJump, Math.abs(C.wrapDelta(p.x - prevX, W)));
+    prevX = p.x;
+  }
+  ok(maxJump < 30, '远端鸟穿边界渲染连续 maxJump(环面)=' + maxJump.toFixed(1) + 'px/帧（修复前 ~800px）');
+}
+
+// 11) 跨缝逃逸：本地鸟在左边缘，远端捕食者在右边缘（环面上捕食者在鸟左侧 10px，鸟应向右逃）
+{
+  const ws = C.makeWorld('B'); ws.local.clear();
+  const bs = C.makeBoid('b1', 5, 300); bs.vx = 0; bs.vy = 0;
+  ws.local.set('b1', bs);
+  C.applyRemoteState(ws, 'A', [{ id: 'rp', k: 'predator', x: 795, y: 300, vx: 0, vy: 0 }], 0, W, H);
+  for (let i = 0; i < 30; i++) C.step(ws, 1 / 60, W, H);
+  ok(bs.vx > 0, '本地鸟跨缝逃离远端捕食者 (vx=' + bs.vx.toFixed(1) + '，向右远离左侧的鹰)');
+}
+
+// 12) 跨缝追猎：本地捕食者在右边缘追左边缘的本地鸟
+{
+  const wc = C.makeWorld('A'); wc.local.clear();
+  const bc = C.makeBoid('b1', 5, 300); bc.vx = 0; bc.vy = 0;
+  const pc = C.makePredator('p1', 790, 300); pc.vx = 0; pc.vy = 0;
+  wc.local.set('b1', bc); wc.local.set('p1', pc);
+  C.step(wc, 1 / 60, W, H);
+  ok(pc.vx > 0, '捕食者跨缝追猎 vx=' + pc.vx.toFixed(1) + '（向右穿出边界）');
+}
+
+// 13) 平稳飞行远端渲染平滑（回归：此前插值段重叠导致周期性前跳）
+// 环面距离测量：排除穿缝时归一化坐标表示的合法跳变
+{
+  const A4 = C.makeWorld('A'); A4.local.clear();
+  const b4 = C.makeBoid('s1', 200, 200); b4.vx = 165; b4.vy = 0;
+  A4.local.set('s1', b4);
+  const B4 = C.makeWorld('B');
+  let sent4 = -1, prev4 = null; const ds = [];
+  for (let t = 0; t < 0.5; t += 1 / 60) {
+    C.step(A4, 1 / 60, W, H);
+    if (t - sent4 >= 0.066) { sent4 = t; C.applyRemoteState(B4, 'A', C.snapshot(A4, W, H), B4.time, W, H); }
+    C.step(B4, 1 / 60, W, H);
+    const r = B4.remote.get('s1');
+    if (!r) continue;
+    const p = C.remotePos(r, B4.time, W, H);
+    if (prev4 !== null) ds.push(C.wrapDelta(p.x - prev4, W));
+    prev4 = p.x;
+  }
+  const jit = ds.filter(d => d > 4 || (d !== 0 && d < 1.5)).length; // d=0 为收到首个快照前的暖启动帧
+  ok(jit === 0, '远端匀速渲染平滑无抖动 (' + jit + '/' + ds.length + '，修复前 9/30)');
+}
+
+// 14) 无 w/h 调用向后兼容
+{
+  const Bc = C.makeWorld('B');
+  C.applyRemoteState(Bc, 'A', [{ id: 'x', k: 'boid', x: 10, y: 10, vx: 0, vy: 0 }], 0);
+  const r = Bc.remote.get('x');
+  const p = C.remotePos(r, 0);
+  ok(isFinite(p.x) && isFinite(p.y), 'remotePos/applyRemoteState 不传 w/h 仍可用');
+}
+
 console.log(fail === 0 ? '\n全部通过 🎉' : '\n有 ' + fail + ' 项失败');
 process.exit(fail ? 1 : 0);

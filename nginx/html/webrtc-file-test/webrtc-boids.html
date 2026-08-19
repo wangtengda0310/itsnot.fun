@@ -408,7 +408,7 @@ function handleData(peerId, m) {
   if (m.t === 'hello') {
     log('👋 ' + peerId + ' 角色=' + m.role);
   } else if (m.t === 'state') {
-    C.applyRemoteState(world, peerId, m.e, world.time);
+    C.applyRemoteState(world, peerId, m.e, world.time, W, H);
   } else if (m.t === 'spawn') {
     // 对端生成实体的即时通告（下一帧 state 也会覆盖，提前显示用）
   } else if (m.t === 'clear') {
@@ -471,26 +471,32 @@ const COLORS = {
 };
 
 function drawEntity(x, y, vx, vy, color, size, isPred) {
-  const a = Math.atan2(vy, vx);
-  ctx.save();
-  ctx.translate(x, y);
-  ctx.rotate(a);
   ctx.fillStyle = color;
-  ctx.beginPath();
-  if (isPred) { // 鹰：大三角 + 翼展
-    ctx.moveTo(size * 1.6, 0);
-    ctx.lineTo(-size, size * 0.9);
-    ctx.lineTo(-size * 0.4, 0);
-    ctx.lineTo(-size, -size * 0.9);
-  } else {
-    ctx.moveTo(size * 1.4, 0);
-    ctx.lineTo(-size, size * 0.7);
-    ctx.lineTo(-size * 0.5, 0);
-    ctx.lineTo(-size, -size * 0.7);
+  // 主体 + 跨边界时的对侧残影（环面渲染，消除 wrap 视觉断裂）
+  const offs = [[0, 0]];
+  if (x < size * 2) offs.push([W, 0]); else if (x > W - size * 2) offs.push([-W, 0]);
+  if (y < size * 2) offs.push([0, H]); else if (y > H - size * 2) offs.push([0, -H]);
+  const a = Math.atan2(vy, vx);
+  for (const [ox, oy] of offs) {
+    ctx.save();
+    ctx.translate(x + ox, y + oy);
+    ctx.rotate(a);
+    ctx.beginPath();
+    if (isPred) { // 鹰：大三角 + 翼展
+      ctx.moveTo(size * 1.6, 0);
+      ctx.lineTo(-size, size * 0.9);
+      ctx.lineTo(-size * 0.4, 0);
+      ctx.lineTo(-size, -size * 0.9);
+    } else {
+      ctx.moveTo(size * 1.4, 0);
+      ctx.lineTo(-size, size * 0.7);
+      ctx.lineTo(-size * 0.5, 0);
+      ctx.lineTo(-size, -size * 0.7);
+    }
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
   }
-  ctx.closePath();
-  ctx.fill();
-  ctx.restore();
 }
 
 // eat 粒子
@@ -518,7 +524,7 @@ function loop(nowMs) {
   // 15Hz 状态广播
   if (connected && nowMs - lastStateSend > 66) {
     lastStateSend = nowMs;
-    const snap = C.snapshot(world);
+    const snap = C.snapshot(world, W, H);
     if (snap.length || conns.size) dcBroadcast({ t: 'state', e: snap });
   }
 
@@ -532,10 +538,10 @@ function loop(nowMs) {
     if (!isPred && world.time < e.deadUntil) continue;
     drawEntity(e.x, e.y, e.vx, e.vy, isPred ? COLORS.predLocal : COLORS.boidLocal, isPred ? 11 : 6, isPred);
   }
-  // 远端实体（插值）
+  // 远端实体（环面插值）
   for (const r of world.remote.values()) {
     if (r.dead) continue;
-    const p = C.remotePos(r, world.time);
+    const p = C.remotePos(r, world.time, W, H);
     const isPred = r.kind === 'predator';
     drawEntity(p.x, p.y, r.vx, r.vy, isPred ? COLORS.predRemote : COLORS.boidRemote, isPred ? 11 : 6, isPred);
   }

@@ -80,8 +80,23 @@
     return out;
   }
 
-  // ---- 远端快照应用 ----
-  function applyRemoteState(world, peerId, entities, msgTime) {
+  // 环面最短有向位移：|d| 超过半屏说明发生了 wrap，走另一侧的短路径
+  function wrapDelta(d, size) {
+    if (size > 0) {
+      if (d > size / 2) d -= size;
+      else if (d < -size / 2) d += size;
+    }
+    return d;
+  }
+  function wrapNorm(v, size) {
+    if (size > 0) { v = v % size; if (v < 0) v += size; }
+    return v;
+  }
+
+  const SEG = 0.07; // 插值段长（秒），与 15Hz 广播间隔匹配
+
+  // ---- 远端快照应用（w/h 可选：提供后启用环面插值） ----
+  function applyRemoteState(world, peerId, entities, msgTime, w, h) {
     world.remotePeers.add(peerId);
     const now = world.time;
     const liveIds = new Set();
@@ -92,10 +107,10 @@
         r = { id: s.id, kind: s.k, owner: peerId, from: null, to: null, x: s.x, y: s.y, vx: 0, vy: 0 };
         world.remote.set(s.id, r);
       }
-      // 上一段终点作为新起点
-      const px = r.to ? r.to.x : s.x, py = r.to ? r.to.y : s.y;
-      r.from = { t: now, x: px, y: py };
-      r.to = { t: now + 0.1, x: s.x, y: s.y }; // 假设 10Hz，段长 100ms
+      // 新段起点 = 当前插值位置（而非上段终点），消除段重叠造成的周期性前跳
+      const cur = remotePos(r, now, w, h);
+      r.from = { t: now, x: cur.x, y: cur.y };
+      r.to = { t: now + SEG, x: s.x, y: s.y };
       r.vx = s.vx; r.vy = s.vy;
       r.dead = !!s.d;
       r.lastMsg = msgTime || now;
@@ -111,17 +126,22 @@
     for (const [id, r] of world.remote) if (r.owner === peerId) world.remote.delete(id);
   }
 
-  // 远端实体当前渲染位置（线性插值 + 速度外推兜底）
-  function remotePos(r, now) {
-    if (!r.from || !r.to) return { x: r.x, y: r.y };
-    const span = r.to.t - r.from.t || 0.1;
-    let a = (now - r.from.t) / span;
-    if (a > 1.6) a = 1.6; // 允许少量外推
-    return { x: r.from.x + (r.to.x - r.from.x) * a, y: r.from.y + (r.to.y - r.from.y) * a };
+  // 远端实体当前渲染位置（环面最短路径插值 + 速度外推兜底，返回归一化坐标）
+  function remotePos(r, now, w, h) {
+    let x, y;
+    if (!r.from || !r.to) { x = r.x; y = r.y; }
+    else {
+      const span = r.to.t - r.from.t || SEG;
+      let a = (now - r.from.t) / span;
+      if (a > 1.6) a = 1.6; // 允许少量外推
+      x = r.from.x + wrapDelta(r.to.x - r.from.x, w) * a;
+      y = r.from.y + wrapDelta(r.to.y - r.from.y, h) * a;
+    }
+    return { x: wrapNorm(x, w), y: wrapNorm(y, h) };
   }
 
-  // ---- 邻居收集：本地活体 + 远端插值位置 ----
-  function collectNeighbors(world, now) {
+  // ---- 邻居收集：本地活体 + 远端插值位置（环面坐标） ----
+  function collectNeighbors(world, now, w, h) {
     const list = [];
     for (const e of world.local.values()) {
       if (e.kind === 'boid' && now < e.deadUntil) continue;
@@ -129,15 +149,16 @@
     }
     for (const r of world.remote.values()) {
       if (r.dead) continue;
-      const p = remotePos(r, now);
+      const p = remotePos(r, now, w, h);
       list.push({ x: p.x, y: p.y, vx: r.vx, vy: r.vy, kind: r.kind, ref: r, remote: true });
     }
     return list;
   }
 
+  // 边界穿越：精确归一化到 [0,w)×[0,h)，不给插值留模糊死区；尺寸非法时跳过
   function wrap(e, w, h) {
-    if (e.x < -P.margin) e.x = w + P.margin; else if (e.x > w + P.margin) e.x = -P.margin;
-    if (e.y < -P.margin) e.y = h + P.margin; else if (e.y > h + P.margin) e.y = -P.margin;
+    e.x = wrapNorm(e.x, w);
+    e.y = wrapNorm(e.y, h);
   }
 
   function limit(vx, vy, max) {
@@ -150,7 +171,7 @@
   function step(world, dt, w, h) {
     world.time += dt;
     const now = world.time;
-    const neighbors = collectNeighbors(world, now);
+    const neighbors = collectNeighbors(world, now, w, h);
     const sepR2 = P.separationDist * P.separationDist;
     const perR2 = P.perception * P.perception;
 
@@ -164,7 +185,7 @@
 
         for (const n of neighbors) {
           if (n.ref === e) continue;
-          const dx = e.x - n.x, dy = e.y - n.y;
+          const dx = wrapDelta(e.x - n.x, w), dy = wrapDelta(e.y - n.y, h); // 环面距离：跨缝正确聚群
           const d2 = dx * dx + dy * dy;
           if (n.kind === 'predator') {
             if (d2 < P.fleeRadius * P.fleeRadius) {
@@ -199,19 +220,19 @@
         let best = null, bestD2 = P.chaseRadius * P.chaseRadius;
         for (const n of neighbors) {
           if (n.kind !== 'boid') continue;
-          const dx = n.x - e.x, dy = n.y - e.y;
+          const dx = wrapDelta(n.x - e.x, w), dy = wrapDelta(n.y - e.y, h); // 环面距离：跨缝追猎
           const d2 = dx * dx + dy * dy;
-          if (d2 < bestD2) { bestD2 = d2; best = n; }
+          if (d2 < bestD2) { bestD2 = d2; best = { n, dx, dy }; }
         }
         let ax = 0, ay = 0;
         if (best) {
           const d = Math.sqrt(bestD2) || 1;
-          ax = ((best.x - e.x) / d) * P.wChase * 260 + (best.vx - e.vx) * 0.6;
-          ay = ((best.y - e.y) / d) * P.wChase * 260 + (best.vy - e.vy) * 0.6;
+          ax = (best.dx / d) * P.wChase * 260 + (best.n.vx - e.vx) * 0.6;
+          ay = (best.dy / d) * P.wChase * 260 + (best.n.vy - e.vy) * 0.6;
           // 捕食判定：只杀本地鸟；远端鸟由其 owner 自己判定（用远端插值位置）
-          if (!best.remote && d < P.catchRadius) {
-            best.ref.deadUntil = now + P.respawnDelay;
-            world.events.push({ type: 'eat', x: best.ref.x, y: best.ref.y, t: now });
+          if (!best.n.remote && d < P.catchRadius) {
+            best.n.ref.deadUntil = now + P.respawnDelay;
+            world.events.push({ type: 'eat', x: best.n.ref.x, y: best.n.ref.y, t: now });
           }
         } else {
           // 无目标时漫游
@@ -227,21 +248,22 @@
     }
   }
 
-  // 本地实体 → 广播快照（死的鸟也广播 d 标志，让远端显示消散）
-  function snapshot(world) {
+  // 本地实体 → 广播快照（坐标必须归一化到 [0,w)×[0,h)，否则远端环面插值会绕远路）
+  function snapshot(world, w, h) {
     const out = [];
     const now = world.time;
     for (const e of world.local.values()) {
+      const x = +wrapNorm(e.x, w).toFixed(1), y = +wrapNorm(e.y, h).toFixed(1);
       if (e.kind === 'boid' && now < e.deadUntil) {
-        out.push({ id: e.id, k: 'boid', x: e.x, y: e.y, vx: 0, vy: 0, d: 1 });
+        out.push({ id: e.id, k: 'boid', x, y, vx: 0, vy: 0, d: 1 });
       } else {
-        out.push({ id: e.id, k: e.kind, x: +e.x.toFixed(1), y: +e.y.toFixed(1), vx: +e.vx.toFixed(1), vy: +e.vy.toFixed(1) });
+        out.push({ id: e.id, k: e.kind, x, y, vx: +e.vx.toFixed(1), vy: +e.vy.toFixed(1) });
       }
     }
     return out;
   }
 
-  const api = { P, makeWorld, makeBoid, makePredator, spawnAt, applyRemoteState, removePeer, remotePos, step, snapshot };
+  const api = { P, makeWorld, makeBoid, makePredator, spawnAt, applyRemoteState, removePeer, remotePos, wrapDelta, wrapNorm, step, snapshot };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else global.BoidsCore = api;
 })(typeof window !== 'undefined' ? window : globalThis);
