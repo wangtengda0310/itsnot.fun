@@ -4,7 +4,7 @@
 const http = require('http');
 const WebSocket = require('ws');
 
-const PORT = 3001;
+const PORT = process.env.PORT || 3001;
 const server = http.createServer((req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/plain' });
   res.end('WebRTC Signaling Server\n');
@@ -59,17 +59,19 @@ wss.on('connection', (ws) => {
     }
 
     // ---- 转发 offer / answer / candidate ----
-    // msg.to 存在时定向转发（多页面 mesh 需要），否则广播（向后兼容）
+    // 服务端盖章发送方 peerId（多页面 mesh 路由必需），客户端不可伪造自己身份
+    // msg.to 存在时定向转发，否则广播（向后兼容）
     if (['offer', 'answer', 'candidate'].includes(msg.type)) {
       const room = ws._room;
       if (!room) return;
+      const out = JSON.stringify(Object.assign({}, msg, { from: ws._peerId }));
       const list = rooms.get(room) || [];
       list.forEach(client => {
         if (client.readyState !== WebSocket.OPEN) return;
         if (msg.to != null) {
-          if (client._peerId === msg.to) client.send(JSON.stringify(msg));
+          if (client._peerId === msg.to) client.send(out);
         } else if (client !== ws) {
-          client.send(JSON.stringify(msg));
+          client.send(out);
         }
       });
     }

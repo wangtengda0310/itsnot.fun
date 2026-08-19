@@ -43,8 +43,18 @@ node signal.js        # ws://127.0.0.1:3001
 | `{t:'clear'}` | 手动清空 | 移除该 peer 全部远端实体 |
 | `{t:'ping'/'pong'}` | 测 RTT | |
 
-mesh 组网：后到者向已在房间者发起 offer（与 webrtc-file-test v3 相同的策略）。
-多页面（>2）时任意两两之间都建立 DataChannel。
+## mesh 组网（v2 重写，多页面自愈）
+
+- **发起方唯一**：按 peerId 字典序小的一侧发 offer（`mesh-core.js`），两侧独立计算结果一致，
+  杜绝双向同时发 offer 的 glare 冲突
+- **超时重试**：协商 8s 未成功自动重新发起；ICE `failed` 立即拆除重连
+- **心跳自愈**（MQTT / Itty）：每 5s 广播 presence，丢了的 hi/hello/offer 会在下一轮心跳后自动补齐；
+  16s 未见心跳判定离线并拆除
+- **收到 offer 即清场重答**：对端重试/重启场景不会卡在半开状态
+- **Trystero 模式**直接用其自带 P2P 通道（虚拟 DataChannel），不再叠加第二层 WebRTC
+- **本地 signal.js** 服务端为转发消息盖章 `from`（多页面定向路由必需；**需重启新版 signal.js**）
+
+mesh 决策全部在 `mesh-core.js`（零依赖纯逻辑），单测见 `test-mesh.js`（含 signal.js 集成测试）。
 
 ## 仿真规则
 
@@ -66,6 +76,8 @@ mesh 组网：后到者向已在房间者发起 offer（与 webrtc-file-test v3 
 
 - `webrtc-boids.html` — 演示页面（UI + 信令适配层 + mesh 连接层 + 渲染）
 - `boids-core.js` — 仿真内核（零依赖，页面与 Node 通用）
-- `test-boids.js` — 内核自测：`node test-boids.js`（19 项断言）
-- `signal.js` — 本地信令服务器（已加定向转发 `msg.to`，向后兼容广播）
+- `mesh-core.js` — mesh 组网策略（发起方决策/重试/心跳，零依赖纯逻辑）
+- `test-boids.js` — 内核自测：`node test-boids.js`（24 项断言）
+- `test-mesh.js` — 组网自测：`node test-mesh.js`（mesh-core 单测 + signal.js 集成测试）
+- `signal.js` — 本地信令服务器（定向转发 `msg.to` + 服务端盖章 `from`）
 - `webrtc-file-test.html` — 原 v3 防呆测试页面
