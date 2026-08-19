@@ -38,7 +38,7 @@ wss.on('connection', (ws) => {
       const peerId = list.length;
       ws._peerId = peerId;
 
-      // 通知自己 joined
+      // 通知自己 joined（附带 peerId 供客户端回填 from）
       ws.send(JSON.stringify({
         type: 'joined',
         peerId: peerId,
@@ -59,12 +59,16 @@ wss.on('connection', (ws) => {
     }
 
     // ---- 转发 offer / answer / candidate ----
+    // msg.to 存在时定向转发（多页面 mesh 需要），否则广播（向后兼容）
     if (['offer', 'answer', 'candidate'].includes(msg.type)) {
       const room = ws._room;
       if (!room) return;
       const list = rooms.get(room) || [];
       list.forEach(client => {
-        if (client !== ws && client.readyState === WebSocket.OPEN) {
+        if (client.readyState !== WebSocket.OPEN) return;
+        if (msg.to != null) {
+          if (client._peerId === msg.to) client.send(JSON.stringify(msg));
+        } else if (client !== ws) {
           client.send(JSON.stringify(msg));
         }
       });

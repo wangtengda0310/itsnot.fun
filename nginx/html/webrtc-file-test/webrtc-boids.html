@@ -1,0 +1,567 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>WebRTC 鸟群/捕食者 互联演示</title>
+<style>
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;overflow:hidden;background:#0d1117;font-family:ui-monospace,Menlo,Consolas,monospace;color:#c9d1d9}
+#cv{position:fixed;inset:0;display:block;cursor:crosshair}
+#topbar{position:fixed;top:0;left:0;right:0;display:flex;align-items:center;gap:8px;flex-wrap:wrap;
+  padding:6px 10px;background:rgba(13,17,23,.92);border-bottom:1px solid #30363d;font-size:12px;z-index:10}
+#topbar select,#topbar input,#topbar button{background:#161b22;color:#c9d1d9;border:1px solid #30363d;
+  border-radius:6px;padding:4px 8px;font:inherit;font-size:12px}
+#topbar input{width:150px}
+#topbar input#peerIdInput{width:200px}
+#topbar button{cursor:pointer}
+#topbar button:hover{border-color:#58a6ff}
+#topbar button.primary{background:#1f6feb;border-color:#1f6feb;color:#fff}
+#topbar button.role.on{background:#238636;border-color:#238636;color:#fff}
+#topbar label{color:#8b949e}
+.hidden{display:none!important}
+#status{font-size:11px;color:#8b949e;position:fixed;left:10px;bottom:34px;z-index:10;max-width:60vw;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#stats{position:fixed;left:10px;bottom:10px;font-size:11px;color:#58a6ff;z-index:10}
+#peers{position:fixed;right:10px;top:44px;font-size:11px;color:#8b949e;z-index:10;text-align:right;line-height:1.7}
+#logwrap{position:fixed;right:10px;bottom:10px;width:380px;max-height:200px;overflow-y:auto;z-index:10;
+  background:rgba(13,17,23,.9);border:1px solid #30363d;border-radius:6px;padding:6px 8px;font-size:11px;line-height:1.5}
+#logwrap .t{color:#565d66;margin-right:5px}
+#hint{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);color:#8b949e;font-size:14px;z-index:5;
+  background:rgba(13,17,23,.85);padding:14px 22px;border:1px dashed #30363d;border-radius:10px;text-align:center;line-height:1.9;pointer-events:none}
+</style>
+</head>
+<body>
+<canvas id="cv"></canvas>
+
+<div id="topbar">
+  <label>信令</label>
+  <select id="sigType">
+    <option value="local">本地 signal.js</option>
+    <option value="mqtt">公共 MQTT</option>
+    <option value="peerjs">PeerJS 云</option>
+    <option value="trystero">Trystero(Nostr)</option>
+    <option value="itty">Itty Sockets</option>
+  </select>
+  <select id="mqttBroker" class="hidden">
+    <option value="wss://broker.emqx.io:8084/mqtt">EMQX</option>
+    <option value="wss://test.mosquitto.org:8081">Mosquitto</option>
+    <option value="wss://broker.hivemq.com:8884/mqtt">HiveMQ</option>
+  </select>
+  <input id="wsUrl" value="ws://127.0.0.1:3001" title="本地信令服务器地址">
+  <input id="room" value="boids-room-1" title="房间名">
+  <input id="peerIdInput" class="hidden" placeholder="对方 PeerJS ID">
+  <button id="connectBtn" class="primary">🔌 连接</button>
+  <span style="border-left:1px solid #30363d;height:18px"></span>
+  <label>角色</label>
+  <button id="roleFlock" class="role on">🐦 鸟群</button>
+  <button id="rolePred" class="role">🦅 捕食者</button>
+  <span style="border-left:1px solid #30363d;height:18px"></span>
+  <button id="clearBtn">🗑 清空我的</button>
+  <button id="logBtn">📋 日志</button>
+</div>
+
+<div id="status">未连接</div>
+<div id="stats"></div>
+<div id="peers"></div>
+<div id="logwrap" class="hidden"></div>
+<div id="hint">选择信令方式 → 🔌 连接 → 点击画布生成实体<br>
+<span style="font-size:12px">两个（或多个）页面进同一房间即互联 · 各自仿真自己生成的实体 · 15Hz 状态广播</span></div>
+
+<script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"></script>
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script src="boids-core.js"></script>
+<script type="module">
+import { joinRoom as trysteroJoin } from 'https://esm.run/trystero@0.21.5';
+import { connect as ittyConnect } from 'https://esm.run/itty-sockets@0.9.3';
+
+const C = window.BoidsCore;
+const $ = id => document.getElementById(id);
+const myId = Math.random().toString(36).slice(2, 8);
+
+// ================= 日志 =================
+const logEl = $('logwrap');
+function log(msg) {
+  const d = document.createElement('div');
+  const t = new Date();
+  d.innerHTML = '<span class="t">' + t.toTimeString().slice(0, 8) + '</span>' + msg;
+  logEl.appendChild(d);
+  logEl.scrollTop = logEl.scrollHeight;
+  while (logEl.children.length > 200) logEl.removeChild(logEl.firstChild);
+}
+$('logBtn').onclick = () => logEl.classList.toggle('hidden');
+
+// ================= UI =================
+let role = 'flock';
+$('roleFlock').onclick = () => setRole('flock');
+$('rolePred').onclick = () => setRole('predator');
+function setRole(r) {
+  role = r;
+  $('roleFlock').classList.toggle('on', r === 'flock');
+  $('rolePred').classList.toggle('on', r === 'predator');
+  log('🎯 角色: ' + (r === 'flock' ? '🐦 鸟群（点击放鸟）' : '🦅 捕食者（点击放鹰）'));
+}
+$('sigType').onchange = () => {
+  const v = $('sigType').value;
+  $('mqttBroker').classList.toggle('hidden', v !== 'mqtt');
+  $('wsUrl').classList.toggle('hidden', v !== 'local');
+  $('peerIdInput').classList.toggle('hidden', v !== 'peerjs');
+};
+
+// ================= 世界 =================
+const world = C.makeWorld(myId);
+let connected = false;
+
+// ================= 信令适配层 =================
+// 统一接口: { join(room), send(to, payload), leave(), onPeer(id), onPeerLeave(id), onMessage(from, payload) }
+let sig = null;
+
+function createSignaling(type) {
+  const handlers = { peer: [], leave: [], msg: [], open: [], close: [] };
+  const emit = (k, ...a) => handlers[k].forEach(f => f(...a));
+  const base = {
+    onPeer: f => handlers.peer.push(f),
+    onPeerLeave: f => handlers.leave.push(f),
+    onMessage: f => handlers.msg.push(f),
+    onOpen: f => handlers.open.push(f),
+    onClose: f => handlers.close.push(f),
+  };
+
+  // ---------- 本地 signal.js（ws 房间，mesh：新人向老人发 offer） ----------
+  if (type === 'local') {
+    let ws = null;
+    return Object.assign(base, {
+      join(room) {
+        ws = new WebSocket($('wsUrl').value.trim() || 'ws://127.0.0.1:3001');
+        ws.onopen = () => ws.send(JSON.stringify({ type: 'join', room }));
+        ws.onmessage = ev => {
+          let m; try { m = JSON.parse(ev.data); } catch { return; }
+          if (m.type === 'joined') {
+            ws._peerId = m.peerId;
+            log('📩 joined peerId=' + m.peerId + ' existing=[' + m.existing + ']');
+            emit('open');
+            // 新人向所有老人发 offer（后到者发起，与 v3 测试一致）
+            setTimeout(() => m.existing.forEach(id => emit('peer', { id: String(id), initiator: true })), 50);
+          } else if (m.type === 'peer-joined') {
+            emit('peer', { id: String(m.peerId), initiator: false });
+          } else if (m.type === 'peer-left') {
+            emit('leave', String(m.peerId));
+          } else if (['offer', 'answer', 'candidate'].includes(m.type)) {
+            if (m.from == null && ws._peerId != null) m.from = ws._peerId; // signal.js 不回填 from 时本地回填不可靠，由连接层用兜底
+            emit('msg', String(m.from), m);
+          }
+        };
+        ws.onclose = () => emit('close');
+        ws.onerror = () => log('❌ 信令 WS 错误');
+      },
+      send(to, payload) {
+        if (ws && ws.readyState === 1) ws.send(JSON.stringify(Object.assign({ to: to == null ? undefined : +to }, payload)));
+      },
+      leave() { ws && ws.close(); },
+    });
+  }
+
+  // ---------- 公共 MQTT（在线名单 + 定向 topic，后到者发起 offer） ----------
+  if (type === 'mqtt') {
+    let mc = null, prefix = '';
+    const tSig = id => prefix + '/sig/' + id;
+    const sendRaw = (topic, obj) => mc && mc.publish(topic, JSON.stringify(obj), { qos: 0 });
+    return Object.assign(base, {
+      join(room) {
+        prefix = 'webrtc-boids-v1/' + room;
+        mc = mqtt.connect($('mqttBroker').value, {
+          clientId: 'boids-' + myId + '-' + Math.random().toString(36).slice(2, 6),
+          keepalive: 30, reconnectPeriod: 3000, connectTimeout: 15000, clean: true,
+          will: { topic: prefix + '/pres', payload: JSON.stringify({ t: 'bye', id: myId }), qos: 0 },
+        });
+        mc.on('connect', () => {
+          log('✅ MQTT 已连接 ' + $('mqttBroker').value);
+          mc.subscribe([prefix + '/pres', tSig(myId)], { qos: 0 });
+          sendRaw(prefix + '/pres', { t: 'hi', id: myId });
+          emit('open');
+        });
+        mc.on('message', (topic, buf) => {
+          let m; try { m = JSON.parse(buf.toString()); } catch { return; }
+          if (topic === prefix + '/pres') {
+            if (m.id === myId) return;
+            if (m.t === 'hi') {
+              emit('peer', { id: m.id, initiator: false });
+              sendRaw(prefix + '/pres', { t: 'hello', id: myId }); // 回礼让新人发现自己
+            } else if (m.t === 'hello') {
+              emit('peer', { id: m.id, initiator: true }); // 我是新人 → 我发 offer
+            } else if (m.t === 'bye') {
+              emit('leave', m.id);
+            }
+          } else if (topic === tSig(myId)) {
+            emit('msg', String(m.from), m);
+          }
+        });
+        mc.on('error', e => log('❌ MQTT 错误: ' + e.message));
+        mc.on('close', () => emit('close'));
+      },
+      send(to, payload) { if (to != null) sendRaw(tSig(to), Object.assign({ from: myId }, payload)); },
+      leave() { if (mc) { sendRaw(prefix + '/pres', { t: 'bye', id: myId }); mc.end(); } },
+    });
+  }
+
+  // ---------- PeerJS 云（0.peerjs.com，一对一，手动交换 ID） ----------
+  if (type === 'peerjs') {
+    let peer = null, pending = [];
+    return Object.assign(base, {
+      join() {
+        peer = new Peer('boids-' + myId + '-' + Math.random().toString(36).slice(2, 6));
+        peer.on('open', id => {
+          log('✅ PeerJS 已连接云服务器，我的 ID: <b>' + id + '</b>（对方在输入框填此 ID 后点连接）');
+          emit('open');
+          const remote = $('peerIdInput').value.trim();
+          if (remote) { log('📞 主动连接 ' + remote); emit('peer', { id: remote, initiator: true }); }
+        });
+        peer.on('connection', dc => {
+          pending.push(dc);
+          dc.on('open', () => emit('peer', { id: dc.peer, initiator: false }));
+        });
+        peer.on('error', e => log('❌ PeerJS: ' + e.type));
+        peer.on('disconnected', () => emit('close'));
+      },
+      getPeerConnection(id, initiator) { // 连接层特殊钩子：直接给 DataConnection
+        if (initiator) {
+          const dc = peer.connect(id, { reliable: true });
+          return wrapPeerJSDC(dc);
+        }
+        const i = pending.findIndex(d => d.peer === id);
+        if (i >= 0) return wrapPeerJSDC(pending.splice(i, 1)[0]);
+        return null; // 等 connection 事件
+      },
+      send() {}, // PeerJS 模式不经信令通道发消息
+      leave() { peer && peer.destroy(); },
+    });
+  }
+
+  // ---------- Trystero（Nostr 公共 relay，内置 WebRTC 配对） ----------
+  if (type === 'trystero') {
+    let room = null, act = null, peers = new Set();
+    return Object.assign(base, {
+      join(roomId) {
+        room = trysteroJoin({ appId: 'itsnotfun-webrtc-boids' }, roomId);
+        act = room.makeAction('sig');
+        act.onMessage((payload, peerId) => emit('msg', String(peerId), payload));
+        room.onPeerJoin(id => { peers.add(id); emit('peer', { id, initiator: 'trystero' }); });
+        room.onPeerLeave(id => { peers.delete(id); emit('leave', String(id)); });
+        emit('open');
+        log('✅ Trystero 已加入房间（经公共 Nostr relay 配对，P2P 建连需要几秒）');
+      },
+      send(to, payload) { act.send(payload, to == null ? undefined : to); },
+      leave() { room && room.leave(); },
+    });
+  }
+
+  // ---------- Itty Sockets（零配置公共 WS 频道，协议同本地 signal.js） ----------
+  if (type === 'itty') {
+    let ch = null;
+    const peerIds = new Set();
+    return Object.assign(base, {
+      join(room) {
+        ch = ittyConnect('boids-' + room.replace(/[^a-zA-Z0-9_-]/g, '') + '-' + myId.slice(0, 4));
+        ch.on('open', () => { ch.push({ t: 'hi', id: myId }); emit('open'); });
+        ch.on('message', m => {
+          const msg = m.message || m;
+          if (!msg || msg.id === myId || msg.from === myId) return;
+          if (msg.t === 'hi') {
+            peerIds.add(msg.id);
+            emit('peer', { id: msg.id, initiator: false });
+            ch.push({ t: 'hello', id: myId });
+          } else if (msg.t === 'hello') {
+            if (!peerIds.has(msg.id)) { peerIds.add(msg.id); emit('peer', { id: msg.id, initiator: true }); }
+          } else if (msg.t === 'bye') {
+            peerIds.delete(msg.id); emit('leave', msg.id);
+          } else if (['offer', 'answer', 'candidate'].includes(msg.type)) {
+            if (msg.to && msg.to !== myId) return;
+            emit('msg', String(msg.from), msg);
+          }
+        });
+        ch.on('close', () => emit('close'));
+      },
+      send(to, payload) { ch && ch.push(Object.assign({ from: myId, to: to || undefined }, payload)); },
+      leave() { if (ch) { ch.push({ t: 'bye', id: myId }); ch.close(); } },
+    });
+  }
+}
+
+// ================= WebRTC 连接层（mesh） =================
+const RTC_CFG = { iceServers: [
+  { urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] },
+]};
+const conns = new Map(); // peerId -> { pc, dc, open }
+let sigTypeNow = 'local';
+
+function wrapPeerJSDC(dc) { // 让 PeerJS DataConnection 长得像 RTCDataChannel
+  dc.binaryType = 'arraybuffer';
+  return {
+    _dc: dc,
+    readyState: 'connecting',
+    onopen: null, onmessage: null, onclose: null,
+    send(d) { dc.send(d); },
+    close() { dc.close(); },
+  };
+}
+
+function setupDC(peerId, dc) {
+  const c = conns.get(peerId); if (!c) return;
+  c.dc = dc;
+  dc.onopen = () => {
+    c.open = true;
+    log('✅✅✅ DataChannel 打开 → ' + peerId);
+    dcSend(peerId, { t: 'hello', role });
+    refreshPeersUI();
+  };
+  dc.onmessage = ev => {
+    let m; try { m = JSON.parse(ev.data); } catch { return; }
+    handleData(peerId, m);
+  };
+  dc.onclose = () => { c.open = false; log('⚠ DataChannel 关闭 → ' + peerId); teardown(peerId); };
+  if (dc._dc) { // PeerJS：事件挂到原生对象
+    dc._dc.on('open', () => dc.onopen());
+    dc._dc.on('data', d => dc.onmessage({ data: typeof d === 'string' ? d : JSON.stringify(d) }));
+    dc._dc.on('close', () => dc.onclose());
+    dc._dc.on('error', e => log('❌ DC 错误 ' + peerId + ': ' + e));
+  }
+}
+
+function connectPeer(peerId, initiator) {
+  if (conns.has(peerId)) { log('⏭ 已存在连接 ' + peerId); return; }
+  conns.set(peerId, { pc: null, dc: null, open: false });
+  refreshPeersUI();
+
+  if (sigTypeNow === 'peerjs') {
+    const dc = sig.getPeerConnection(peerId, initiator);
+    if (dc) setupDC(peerId, dc);
+    return; // 非发起方等 getPeerConnection 在 connection 事件里被调
+  }
+
+  const pc = new RTCPeerConnection(RTC_CFG);
+  conns.get(peerId).pc = pc;
+  pc.onicecandidate = ev => {
+    if (ev.candidate) sigSend(peerId, { type: 'candidate', candidate: ev.candidate.toJSON() });
+  };
+  pc.onconnectionstatechange = () => log('🔄 PC[' + peerId + '] ' + pc.connectionState);
+  pc.ondatachannel = ev => { log('📡 DataChannel [' + peerId + ' 接收]'); setupDC(peerId, ev.channel); };
+
+  if (initiator) {
+    setupDC(peerId, pc.createDataChannel('boids', { ordered: true }));
+    pc.createOffer()
+      .then(o => pc.setLocalDescription(o))
+      .then(() => sigSend(peerId, { type: 'offer', sdp: pc.localDescription.toJSON() }))
+      .then(() => log('📤 发送 Offer → ' + peerId))
+      .catch(e => log('❌ offer 失败: ' + e));
+  }
+}
+
+async function onSigMessage(from, m) {
+  if (from == null || from === 'null') return;
+  if (!conns.has(from)) conns.set(from, { pc: null, dc: null, open: false });
+  const c = conns.get(from);
+  if (sigTypeNow === 'peerjs') return; // peerjs 无信令消息
+
+  let pc = c.pc;
+  if (m.type === 'offer') {
+    log('📩 收到 Offer ← ' + from);
+    if (!pc) { // 被动方补建
+      pc = new RTCPeerConnection(RTC_CFG);
+      c.pc = pc;
+      pc.onicecandidate = ev => { if (ev.candidate) sigSend(from, { type: 'candidate', candidate: ev.candidate.toJSON() }); };
+      pc.onconnectionstatechange = () => log('🔄 PC[' + from + '] ' + pc.connectionState);
+      pc.ondatachannel = ev => setupDC(from, ev.channel);
+    }
+    await pc.setRemoteDescription(m.sdp);
+    const ans = await pc.createAnswer();
+    await pc.setLocalDescription(ans);
+    sigSend(from, { type: 'answer', sdp: pc.localDescription.toJSON() });
+    log('📤 发送 Answer → ' + from);
+  } else if (m.type === 'answer') {
+    log('📩 收到 Answer ← ' + from);
+    if (pc) await pc.setRemoteDescription(m.sdp);
+  } else if (m.type === 'candidate') {
+    if (pc && m.candidate) { try { await pc.addIceCandidate(m.candidate); } catch (e) { /* 忽略过期 candidate */ } }
+  }
+}
+
+function teardown(peerId) {
+  const c = conns.get(peerId);
+  if (c) { try { c.dc && c.dc.close(); } catch {} try { c.pc && c.pc.close(); } catch {} }
+  conns.delete(peerId);
+  C.removePeer(world, peerId);
+  refreshPeersUI();
+}
+
+function sigSend(to, payload) { sig && sig.send(to, payload); }
+function dcSend(peerId, obj) {
+  const c = conns.get(peerId);
+  if (c && c.open) { try { c.dc.send(JSON.stringify(obj)); } catch {} }
+}
+function dcBroadcast(obj) {
+  const s = JSON.stringify(obj);
+  for (const [id, c] of conns) if (c.open) { try { c.dc.send(s); } catch {} }
+}
+
+// ================= 数据消息 =================
+function handleData(peerId, m) {
+  if (m.t === 'hello') {
+    log('👋 ' + peerId + ' 角色=' + m.role);
+  } else if (m.t === 'state') {
+    C.applyRemoteState(world, peerId, m.e, world.time);
+  } else if (m.t === 'spawn') {
+    // 对端生成实体的即时通告（下一帧 state 也会覆盖，提前显示用）
+  } else if (m.t === 'clear') {
+    for (const [id, r] of world.remote) if (r.owner === peerId) world.remote.delete(id);
+    log('🗑 ' + peerId + ' 清空了其实体');
+  } else if (m.t === 'ping') {
+    dcSend(peerId, { t: 'pong', ts: m.ts });
+  } else if (m.t === 'pong') {
+    const rtt = performance.now() - m.ts;
+    log('🏓 ' + peerId + ' RTT=' + rtt.toFixed(0) + 'ms');
+  }
+}
+
+// ================= 连接按钮 =================
+$('connectBtn').onclick = () => {
+  if (sig) { sig.leave(); sig = null; connected = false; $('connectBtn').textContent = '🔌 连接'; setStatus('未连接'); return; }
+  sigTypeNow = $('sigType').value;
+  sig = createSignaling(sigTypeNow);
+  const room = $('room').value.trim() || 'boids-room-1';
+  log('🔌 连接信令: ' + sigTypeNow + ' 房间=' + room);
+  sig.onOpen(() => { connected = true; $('connectBtn').textContent = '🔌 断开'; setStatus('已连接信令 · 房间 ' + room); $('hint').style.display = 'none'; });
+  sig.onPeer(p => connectPeer(p.id, p.initiator));
+  sig.onPeerLeave(id => { log('👋 peer 离开: ' + id); teardown(id); });
+  sig.onMessage((from, m) => onSigMessage(from, m).catch(e => log('❌ 信令消息处理: ' + e)));
+  sig.onClose(() => { connected = false; $('connectBtn').textContent = '🔌 连接'; setStatus('信令已断开'); });
+  sig.join(room);
+};
+
+function setStatus(s) { $('status').textContent = s; }
+function refreshPeersUI() {
+  const rows = [];
+  for (const [id, c] of conns) rows.push(id + ': ' + (c.open ? '🟢' : '🟡'));
+  $('peers').innerHTML = rows.length ? 'peers<br>' + rows.join('<br>') : '';
+}
+
+// ================= 画布交互 =================
+const cv = $('cv'), ctx = cv.getContext('2d');
+let W = 0, H = 0;
+function resize() { W = cv.width = innerWidth; H = cv.height = innerHeight; }
+addEventListener('resize', resize); resize();
+
+cv.addEventListener('pointerdown', ev => {
+  if (ev.target !== cv) return;
+  const spawned = C.spawnAt(world, role, ev.clientX, ev.clientY);
+  if (!spawned.length) { log('⚠ 本地实体已达上限 ' + C.P.maxBoids); return; }
+  log((role === 'flock' ? '🐦 +' : '🦅 +') + spawned.length + ' @(' + ev.clientX | 0 + ',' + ev.clientY | 0 + ')');
+  dcBroadcast({ t: 'spawn', role, n: spawned.length });
+});
+
+$('clearBtn').onclick = () => {
+  world.local.clear();
+  dcBroadcast({ t: 'clear' });
+  log('🗑 清空我的实体');
+};
+
+// ================= 渲染 =================
+const COLORS = {
+  boidLocal: '#7ee787', boidRemote: '#58a6ff',
+  predLocal: '#ff7b72', predRemote: '#ffa657',
+};
+
+function drawEntity(x, y, vx, vy, color, size, isPred) {
+  const a = Math.atan2(vy, vx);
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(a);
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  if (isPred) { // 鹰：大三角 + 翼展
+    ctx.moveTo(size * 1.6, 0);
+    ctx.lineTo(-size, size * 0.9);
+    ctx.lineTo(-size * 0.4, 0);
+    ctx.lineTo(-size, -size * 0.9);
+  } else {
+    ctx.moveTo(size * 1.4, 0);
+    ctx.lineTo(-size, size * 0.7);
+    ctx.lineTo(-size * 0.5, 0);
+    ctx.lineTo(-size, -size * 0.7);
+  }
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+}
+
+// eat 粒子
+const particles = [];
+function spawnParticles(x, y) {
+  for (let i = 0; i < 10; i++) {
+    const a = Math.random() * Math.PI * 2, sp = 40 + Math.random() * 120;
+    particles.push({ x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, life: 0.6 });
+  }
+}
+
+let lastT = performance.now(), lastStateSend = 0, fps = 0, frames = 0, fpsT = 0;
+function loop(nowMs) {
+  requestAnimationFrame(loop);
+  let dt = (nowMs - lastT) / 1000; lastT = nowMs;
+  if (dt > 0.05) dt = 0.05;
+  frames++; if (nowMs - fpsT > 1000) { fps = frames; frames = 0; fpsT = nowMs; }
+
+  // 仿真本地实体
+  C.step(world, dt, W, H);
+  // 消费事件
+  for (const e of world.events) if (e.type === 'eat') spawnParticles(e.x, e.y);
+  world.events.length = 0;
+
+  // 15Hz 状态广播
+  if (connected && nowMs - lastStateSend > 66) {
+    lastStateSend = nowMs;
+    const snap = C.snapshot(world);
+    if (snap.length || conns.size) dcBroadcast({ t: 'state', e: snap });
+  }
+
+  // ---- 渲染 ----
+  ctx.fillStyle = 'rgba(13,17,23,0.55)';
+  ctx.fillRect(0, 0, W, H);
+
+  // 本地实体
+  for (const e of world.local.values()) {
+    const isPred = e.kind === 'predator';
+    if (!isPred && world.time < e.deadUntil) continue;
+    drawEntity(e.x, e.y, e.vx, e.vy, isPred ? COLORS.predLocal : COLORS.boidLocal, isPred ? 11 : 6, isPred);
+  }
+  // 远端实体（插值）
+  for (const r of world.remote.values()) {
+    if (r.dead) continue;
+    const p = C.remotePos(r, world.time);
+    const isPred = r.kind === 'predator';
+    drawEntity(p.x, p.y, r.vx, r.vy, isPred ? COLORS.predRemote : COLORS.boidRemote, isPred ? 11 : 6, isPred);
+  }
+  // 粒子
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.x += p.vx * dt; p.y += p.vy * dt; p.life -= dt;
+    if (p.life <= 0) { particles.splice(i, 1); continue; }
+    ctx.fillStyle = 'rgba(255,123,114,' + (p.life / 0.6).toFixed(2) + ')';
+    ctx.fillRect(p.x - 1.5, p.y - 1.5, 3, 3);
+  }
+
+  // 统计
+  let nb = 0, np = 0;
+  for (const e of world.local.values()) e.kind === 'predator' ? np++ : nb++;
+  let rb = 0, rp = 0;
+  for (const r of world.remote.values()) r.kind === 'predator' ? rp++ : rb++;
+  $('stats').textContent =
+    'FPS ' + fps + ' · 本地 🐦' + nb + ' 🦅' + np + ' · 远端 🐦' + rb + ' 🦅' + rp +
+    ' · 连接 ' + [...conns.values()].filter(c => c.open).length + '/' + conns.size;
+}
+requestAnimationFrame(loop);
+
+log('📋 页面就绪 · myId=' + myId);
+log('💡 file:// 直接打开可用（CDN 需联网）；公共服务均可免注册使用');
+setRole('flock');
+</script>
+</body>
+</html>
